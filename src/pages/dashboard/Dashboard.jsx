@@ -31,13 +31,13 @@ function Dashboard() {
                     <p>{user?.email}</p>
                 </div>
             </div>
-            <div className="flex w-full justify-center gap-5 pr-5 pb-10">
+            <div className="flex w-full justify-center gap-5 pb-10">
                 {/* Coluna 1 - 60% */}
                 <div className="basis-6/10 grid grid-cols-3 gap-5 mt-10">
                     <div className="flex flex-col justify-around bg-linear-to-r from-padrao-100 to-padrao-900 h-60 p-5 rounded-2xl text-white">
-                        <h1 className='font-bold text-2xl'>Deixe a IA guiar seu próximo estudo</h1>
+                        <h1 className='font-bold text-lg xl:text-xl '>Deixe a IA guiar seu próximo estudo</h1>
                         <p className='justify-self-center text-center text-xs/5 line-clamp-3 font-bold'>Inicie um novo processo cadastrando as informações do terreno e importando os arquivos. O sistema cuidará do restante.</p>
-                        <a href='#' className='w-50 self-center rounded-md bg-white text-padrao-900 text-sm font-bold mt-5 h-10 flex items-center justify-center'>Criar Projeto com IA</a>
+                        <a href='/estudo' className='w-50 self-center rounded-md bg-white text-padrao-900 text-sm font-bold mt-5 h-10 flex items-center justify-center'>Criar Projeto com IA</a>
                     </div>
                     <div className="bg-blue-100 h-60 p-4 rounded-2xl">Item 2</div>
                     <div className="bg-blue-100 h-60 p-4 rounded-2xl">Item 3</div>

@@ -3,7 +3,7 @@ import { setUser } from '../utils/auth';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import bgBase from '../pages/base/bg-base.png'
-import { Settings, User, Home, LayoutDashboard } from 'lucide-react';
+import { Settings, FileUp, Home, LayoutDashboard, MonitorDown } from 'lucide-react';
 import ItemMenu from '../pages/base/ItemMenu';
 import logo from '../pages/auth/images/logoctz.png'
 
@@ -51,8 +51,8 @@ const MainWrapper = () => {
                         <div className='w-full flex flex-col'>
                             <img src={logo} className='pt-15 pb-8 mb-5 w-50 border-b-2 border-b-gray-200' />
                             <ItemMenu icon={LayoutDashboard} text="Dashboard" to="/dashboard" />
-                            <ItemMenu icon={Home} text="Dashboard" to="#" />
-                            <ItemMenu icon={Home} text="Dashboard" to="#" />
+                            <ItemMenu icon={FileUp} text="Novo Estudo com AI" to="/estudo" />
+                            <ItemMenu icon={MonitorDown} text="Projetos" to="/projetos" />
                             <ItemMenu icon={Home} text="Dashboard" to="#" />
                             <ItemMenu icon={Home} text="Dashboard" to="#" />
                         </div>
@@ -66,7 +66,7 @@ const MainWrapper = () => {
                 {/* Conteúdo principal */}
                 <div className="flex-1 min-h-screen relative">
                     {/* Conteúdo sobreposto ou abaixo da imagem */}
-                    <div className="relative">
+                    <div className="relative pr-5">
                         <Outlet />
                     </div>
                 </div>
