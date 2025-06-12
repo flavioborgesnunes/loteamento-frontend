@@ -10,6 +10,8 @@ import MainWrapper from './layout/mainWrapper';
 import Home from './pages/home/Home';
 import Estudo from './pages/estudo/Estudo';
 import Projetos from './pages/projetos/Projetos';
+import PerfilUsuario from './pages/auth/PerfilUsuario';
+
 
 function App() {
   return (
@@ -28,6 +30,7 @@ function App() {
           <Route path="/register-usuario" element={<RegisterUsuario />} />
           <Route path="/estudo" element={<Estudo />} />
           <Route path="/projetos" element={<Projetos />} />
+          <Route path="/settings" element={<PerfilUsuario />} />
         </Route>
       </Routes>
     </Router>

@@ -7,6 +7,8 @@ import ImgEstudo from './images/img-estudo.png'
 
 function Estudo() {
     const user = useAuthStore(state => state.allUserData);
+    const perfilUser = useAuthStore(state => state.perfilUser);
+
 
     return (
         <>
@@ -18,8 +20,10 @@ function Estudo() {
                     <input type="text" className='bg-white rounded-md pl-3 font-extralight text-sm' placeholder='Pesquisar' />
                     <Bell />
                     <Settings />
-                    <CircleUserRound />
-                    <p>{user?.email}</p>
+                    {user?.foto ? (
+                        <img src={perfilUser?.foto} className='rounded-full w-10 h-10' />
+                    ) : <CircleUserRound />}
+                    <p>{perfilUser?.nome} {perfilUser.sobrenome}</p>
                 </div>
             </div>
 

@@ -10,6 +10,8 @@ import mapa from './images/mapa.png'
 function Dashboard() {
     useAutoLogout();
     const user = useAuthStore(state => state.allUserData);
+    const perfilUser = useAuthStore(state => state.perfilUser);
+
     const navigate = useNavigate();
 
     const handleLogout = () => {
@@ -19,16 +21,23 @@ function Dashboard() {
 
     return (
         <>
-            <div className='flex mt-10 justify-between px-5 text-white'>
+            <div className='flex mt-10 justify-between items-center px-5 text-white'>
                 <h1 className="text-xl">Dashboard</h1>
-                <div className='flex gap-5 mr-5 font-bold'>
+                <div className='flex gap-5 mr-5 font-bold items-center'>
                     <User className='mr-1' />
                     <p className='pr-5 border-r-1' >Fale com um especialista</p>
                     <input type="text" className='bg-white rounded-md pl-3 font-extralight text-sm' placeholder='Pesquisar' />
                     <Bell />
                     <Settings />
-                    <CircleUserRound />
-                    <p>{user?.email}</p>
+                    {perfilUser?.foto ? (
+                        <img src={perfilUser?.foto} className='rounded-full w-10 h-10' />
+                    ) : <CircleUserRound />}
+                    {perfilUser?.nome ? (
+
+                        <p>Bem-vindo, {perfilUser?.nome || 'Usuário'} {perfilUser?.sobrenome || ''}</p>
+                    ) : <p>{perfilUser.email}</p>
+                    }
+
                 </div>
             </div>
             <div className="flex w-full justify-center gap-5 pb-10">
