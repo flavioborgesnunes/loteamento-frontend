@@ -7,18 +7,6 @@ function Projetos() {
     const user = useAuthStore(state => state.allUserData);
     return (
         <>
-            <div className='flex mt-10 justify-between px-5 text-white'>
-                <h1 className="text-xl">Projetos</h1>
-                <div className='flex gap-5 mr-5 font-bold'>
-                    <User className='mr-1' />
-                    <p className='pr-5 border-r-1' >Fale com um especialista</p>
-                    <input type="text" className='bg-white rounded-md pl-3 font-extralight text-sm' placeholder='Pesquisar' />
-                    <Bell />
-                    <Settings />
-                    <CircleUserRound />
-                    <p>{user?.email}</p>
-                </div>
-            </div>
             <div className="w-full mt-10 shadow-md bg-white rounded-2xl p-5">
                 <p className='pt-2 text-2xl font-bold mb-18'>Projetos</p>
 

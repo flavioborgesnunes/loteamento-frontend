@@ -12,21 +12,6 @@ function Estudo() {
 
     return (
         <>
-            <div className='flex mt-10 justify-between px-5 text-white'>
-                <h1 className="text-xl">Novo Estudo AI / Novo Estudo</h1>
-                <div className='flex gap-5 mr-5 font-bold'>
-                    <User className='mr-1' />
-                    <p className='pr-5 border-r-1' >Fale com um especialista</p>
-                    <input type="text" className='bg-white rounded-md pl-3 font-extralight text-sm' placeholder='Pesquisar' />
-                    <Bell />
-                    <Settings />
-                    {user?.foto ? (
-                        <img src={perfilUser?.foto} className='rounded-full w-10 h-10' />
-                    ) : <CircleUserRound />}
-                    <p>{perfilUser?.nome} {perfilUser.sobrenome}</p>
-                </div>
-            </div>
-
             <form className="w-full mt-10 shadow-md bg-white rounded-2xl p-5">
                 <div className="grid grid-cols-2">
                     <div className="px-4">

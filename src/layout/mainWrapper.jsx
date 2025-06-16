@@ -1,27 +1,31 @@
 import { useEffect, useState } from 'react';
 import { setUser } from '../utils/auth';
 import useAxios from '../utils/useAxios';
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import bgBase from '../pages/base/bg-base.png';
-import { Settings, FileUp, Home, LayoutDashboard, MonitorDown } from 'lucide-react';
+import { Bell, User, CircleUserRound, Settings, FileUp, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut } from 'lucide-react';
 import ItemMenu from '../pages/base/ItemMenu';
 import logo from '../pages/auth/images/logoctz.png';
+
 
 const MainWrapper = () => {
     const [loading, setLoading] = useState(true);
     const user = useAuthStore(state => state.allUserData);
     const perfilUser = useAuthStore(state => state.perfilUser);
     const setPerfilUser = useAuthStore(state => state.setPerfilUser);
+    const nome = perfilUser?.nome || 'Usuário';
+    const sobrenome = perfilUser?.sobrenome || '';
+    const [open, setOpen] = useState(false);
     const axiosAuth = useAxios();
+    const navigate = useNavigate();
 
     useEffect(() => {
         const handler = async () => {
             try {
-                setLoading(true);
-                await setUser();
-
-                if (user) {
+                await setUser(); // garante que allUserData será atualizado
+                const updatedUser = useAuthStore.getState().allUserData;
+                if (updatedUser && !perfilUser) {
                     const { data } = await axiosAuth.get('user/');
                     setPerfilUser(data);
                 }
@@ -33,10 +37,14 @@ const MainWrapper = () => {
         };
 
         handler();
-    }, [user]); // Dependência para sempre atualizar quando user mudar (ex: login)
+    }, []); // vazio para rodar uma vez só
+
+    const handleLogout = () => {
+        localStorage.clear();
+        navigate("/login");
+    };
 
     if (loading) return <div>Carregando...</div>;
-
     if (!user) return <Navigate to="/login" replace />;
 
     return (
@@ -91,6 +99,58 @@ const MainWrapper = () => {
                 {/* Conteúdo principal */}
                 <div className="flex-1 min-h-screen relative">
                     {/* Conteúdo sobreposto ou abaixo da imagem */}
+
+                    <div className='flex mt-10 justify-between items-center px-5 text-white'>
+                        <h1 className="text-xl">Dashboard</h1>
+                        <div className='flex gap-5 mr-5 font-bold items-center'>
+                            <User className='mr-1' />
+                            <p className='pr-5 border-r-1' >Fale com um especialista</p>
+                            <input type="text" className='bg-white rounded-md pl-3 py-1 font-extralight text-sm' placeholder='Pesquisar' />
+                            <Bell />
+                            <Settings />
+                            {perfilUser?.foto ? (
+                                <img src={perfilUser?.foto} className='rounded-full w-10 h-10' />
+                            ) : <CircleUserRound />}
+                            <div className="relative inline-block text-left">
+                                <button
+                                    onClick={() => setOpen(!open)}
+                                    className="inline-flex items-center gap-2 px-4 py-2 text-white bg-transparent hover:scale-105"
+                                >
+                                    <span>
+                                        {perfilUser?.nome ? `${nome} ${sobrenome}` : email}
+                                    </span>
+                                    <ChevronDown className="w-4 h-4" />
+                                </button>
+
+                                {open && (
+                                    <div className="absolute right-0 z-10 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg">
+                                        <div className="py-1 text-sm text-gray-700">
+                                            <Link
+                                                to="/settings"
+                                                className="flex items-center px-4 py-2 hover:bg-gray-100 gap-2"
+                                                onClick={() => setOpen(false)}
+                                            >
+                                                <Settings className="w-4 h-4" />
+                                                Editar perfil
+                                            </Link>
+                                            <button
+                                                onClick={() => {
+                                                    handleLogout();
+                                                    setOpen(false);
+                                                }}
+                                                className="flex items-center w-full px-4 py-2 hover:bg-gray-100 gap-2 text-left"
+                                            >
+                                                <LogOut className="w-4 h-4" />
+                                                Logout
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                        </div>
+                    </div>
+
                     <div className="relative pr-5">
                         <Outlet />
                     </div>
