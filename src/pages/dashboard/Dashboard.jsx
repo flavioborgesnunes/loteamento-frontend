@@ -35,7 +35,7 @@ function Dashboard() {
                     {perfilUser?.nome ? (
 
                         <p>Bem-vindo, {perfilUser?.nome || 'Usuário'} {perfilUser?.sobrenome || ''}</p>
-                    ) : <p>{perfilUser.email}</p>
+                    ) : <p>{user.email}</p>
                     }
 
                 </div>

@@ -62,10 +62,10 @@ export default function PerfilUsuario() {
         }
     };
 
-    if (!perfil) return <div>Carregando perfil...</div>;
+    if (!perfil) return <div className='w-full h-screen flex justify-center items-center text-5xl'>Carregando perfil...</div>;
 
     return (
-        <div className="max-w-md mx-auto mt-8 bg-white p-6 rounded shadow">
+        <div className="max-w-md mx-auto bg-white p-6 rounded-2xl shadow mt-30">
             <h2 className="text-2xl font-bold mb-4">Meu Perfil</h2>
 
             <form onSubmit={handleSubmit} encType="multipart/form-data">
