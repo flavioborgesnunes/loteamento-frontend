@@ -95,7 +95,10 @@ function Estudo() {
                 </div>
             </form>
             {/* Mapa MapBox */}
-            <MapComponent className="rounded-xl mt-10 mb-20 " />
+            <div className='flex justify-center'>
+
+                <MapComponent className="rounded-xl mt-10 mb-20 " />
+            </div>
         </>
     );
 }

@@ -44,7 +44,7 @@ function Dashboard() {
             </div>
             <div>
 
-                <div className="flex justify-between items-center mb-6">
+                {/* <div className="flex justify-between items-center mb-6">
 
                     <button
                         onClick={handleLogout}
@@ -66,7 +66,7 @@ function Dashboard() {
                             Adicionar Usuário
                         </Link>
                     )}
-                </div>
+                </div> */}
             </div>
         </>
     );

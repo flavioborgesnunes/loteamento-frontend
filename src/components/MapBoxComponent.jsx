@@ -60,52 +60,80 @@ export default function MapComponent({ className = '' }) {
     }, [style]);
 
     const setupMapExtras = () => {
+        // Limpa controles antigos
         try { if (navControl.current) map.current.removeControl(navControl.current); } catch { }
         try { if (scaleControl.current) map.current.removeControl(scaleControl.current); } catch { }
         try { if (geoControl.current) map.current.removeControl(geoControl.current); } catch { }
         try { if (geocoderControl.current) map.current.removeControl(geocoderControl.current); } catch { }
         try { map.current.removeControl(draw.current); } catch { }
-        try { if (map.current.getLayer('3d-buildings')) map.current.removeLayer('3d-buildings'); } catch { }
 
+        // Remove camadas e fontes de curvas de nível (se existirem)
+        try { if (map.current.getLayer('contour')) map.current.removeLayer('contour'); } catch { }
+        try { if (map.current.getLayer('contour-labels')) map.current.removeLayer('contour-labels'); } catch { }
+        try { if (map.current.getSource('terrain-data')) map.current.removeSource('terrain-data'); } catch { }
+
+        // Adiciona os controles de navegação e localização
         navControl.current = new mapboxgl.NavigationControl();
-        map.current.addControl(navControl.current, 'top-right');
-
         scaleControl.current = new mapboxgl.ScaleControl({ maxWidth: 100, unit: 'metric' });
-        map.current.addControl(scaleControl.current, 'top-right');
-
         geoControl.current = new mapboxgl.GeolocateControl({
             positionOptions: { enableHighAccuracy: true },
             trackUserLocation: true,
             showAccuracyCircle: true,
             showUserHeading: true
         });
+        geocoderControl.current = new MapboxGeocoder({ accessToken: mapboxgl.accessToken, mapboxgl });
+
+        map.current.addControl(navControl.current, 'top-right');
+        map.current.addControl(scaleControl.current, 'top-right');
         map.current.addControl(geoControl.current, 'top-right');
-
-        geocoderControl.current = new MapboxGeocoder({
-            accessToken: mapboxgl.accessToken,
-            mapboxgl
-        });
         map.current.addControl(geocoderControl.current, 'top-left');
-
         map.current.addControl(draw.current);
 
-        if (style.includes('streets')) {
-            map.current.addLayer({
-                id: '3d-buildings',
-                source: 'composite',
-                'source-layer': 'building',
-                filter: ['==', 'extrude', 'true'],
-                type: 'fill-extrusion',
-                minzoom: 15,
-                paint: {
-                    'fill-extrusion-color': '#aaa',
-                    'fill-extrusion-height': ['get', 'height'],
-                    'fill-extrusion-base': ['get', 'min_height'],
-                    'fill-extrusion-opacity': 0.6
-                }
-            });
-        }
+        // Fonte de curvas de nível (dados vetoriais do Mapbox)
+        map.current.addSource('terrain-data', {
+            type: 'vector',
+            url: 'mapbox://mapbox.mapbox-terrain-v2'
+        });
+
+        // Descobre a camada de texto padrão para inserir antes dela (garante visibilidade)
+        const labelLayerId = map.current.getStyle().layers.find(
+            l => l.type === 'symbol' && l.layout?.['text-field']
+        )?.id;
+
+        // Linhas das curvas de nível
+        map.current.addLayer({
+            id: 'contour',
+            type: 'line',
+            source: 'terrain-data',
+            'source-layer': 'contour',
+            layout: {},
+            paint: {
+                'line-color': '#ff6600',
+                'line-width': 1.2
+            }
+        }, labelLayerId);
+
+        // Rótulos com a altitude das curvas
+        map.current.addLayer({
+            id: 'contour-labels',
+            type: 'symbol',
+            source: 'terrain-data',
+            'source-layer': 'contour',
+            layout: {
+                'symbol-placement': 'line',
+                'text-field': ['get', 'ele'],
+                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                'text-size': 11
+            },
+            paint: {
+                'text-color': '#333',
+                'text-halo-color': '#fff',
+                'text-halo-width': 1
+            }
+        }, labelLayerId);
     };
+
+
 
     const handleFileUpload = (e) => {
         const file = e.target.files[0];
@@ -178,7 +206,7 @@ export default function MapComponent({ className = '' }) {
     };
 
     return (
-        <div className={`relative w-full h-[700px] bg-gray-200 rounded-lg shadow overflow-hidden ${className}`}>
+        <div className={`relative w-[1300px] h-[700px] bg-gray-200 rounded-lg shadow overflow-hidden ${className}`}>
             <div className="absolute bottom-20 left-4 z-10 flex flex-col space-y-2">
                 {Object.entries(mapStyles).map(([name, url]) => (
                     <button
@@ -201,6 +229,17 @@ export default function MapComponent({ className = '' }) {
                 <button onClick={handleExportKML} className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200">
                     Exportar KML
                 </button>
+                <button
+                    onClick={() => {
+                        const visible = map.current.getLayoutProperty('contour', 'visibility') === 'visible';
+                        map.current.setLayoutProperty('contour', 'visibility', visible ? 'none' : 'visible');
+                        map.current.setLayoutProperty('contour-labels', 'visibility', visible ? 'none' : 'visible');
+                    }}
+                    className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
+                >
+                    Alternar Curvas de Nível
+                </button>
+
             </div>
 
             <div ref={mapContainer} className="w-full h-full" />

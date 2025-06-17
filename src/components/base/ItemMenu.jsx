@@ -21,7 +21,7 @@ export default function ItemMenu({ icon: Icon = Home, text = 'Início', to = '/'
             >
                 <Icon
                     className={`w-7 h-7 transition-colors duration-300  group-hover:text-black
-                        ${isActive ? 'text-white' : 'text-gray-400'}
+                        ${isActive ? 'text-white group-hover:text-white' : 'text-gray-400'}
                     `}
                 />
             </div>

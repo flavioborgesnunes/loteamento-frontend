@@ -3,9 +3,9 @@ import { setUser } from '../utils/auth';
 import useAxios from '../utils/useAxios';
 import { Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
-import bgBase from '../pages/base/bg-base.png';
-import { Bell, User, CircleUserRound, Settings, FileUp, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut } from 'lucide-react';
-import ItemMenu from '../pages/base/ItemMenu';
+import bgBase from '../components/base/bg-base.png';
+import { Bell, User, CircleUserRound, Settings, FileUp, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut, UserRoundPlus } from 'lucide-react';
+import ItemMenu from '../components/base/ItemMenu';
 import logo from '../pages/auth/images/logoctz.png';
 
 
@@ -72,6 +72,11 @@ const MainWrapper = () => {
                             <ItemMenu icon={MonitorDown} text="Projetos" to="/projetos" />
                             <ItemMenu icon={Home} text="Dashboard" to="#" />
                             <ItemMenu icon={Home} text="Dashboard" to="#" />
+                            {(user.role === 'dono' || user.role === 'adm') && (
+
+                                <ItemMenu icon={UserRoundPlus} text="Cadastra Usuário" to="/register-usuario" />
+
+                            )}
                         </div>
 
                         {/* Exibir nome + foto do usuário na parte inferior da Sidebar */}
