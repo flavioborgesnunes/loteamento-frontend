@@ -3,6 +3,7 @@ import { setUser } from '../utils/auth';
 import useAxios from '../utils/useAxios';
 import { Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
+import { logout } from '../utils/auth'
 import bgBase from '../components/base/bg-base.png';
 import { Bell, User, CircleUserRound, Settings, FileUp, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut, UserRoundPlus } from 'lucide-react';
 import ItemMenu from '../components/base/ItemMenu';
@@ -40,7 +41,7 @@ const MainWrapper = () => {
     }, []); // vazio para rodar uma vez só
 
     const handleLogout = () => {
-        localStorage.clear();
+        logout();
         navigate("/login");
     };
 
