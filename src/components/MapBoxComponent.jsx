@@ -238,18 +238,9 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                     throw new Error("Arquivo KML sem geometrias válidas.");
                 }
 
-                // 2. Exibir camada no mapa
-                const layerId = `layer-${file.name.replace(/\W/g, '_').toLowerCase()}`;
-                if (map.current.getLayer(layerId)) map.current.removeLayer(layerId);
-                if (map.current.getSource(layerId)) map.current.removeSource(layerId);
-
-                map.current.addSource(layerId, { type: 'geojson', data: geojson });
-                map.current.addLayer({
-                    id: layerId,
-                    type: 'line',
-                    source: layerId,
-                    paint: { 'line-color': '#' + Math.floor(Math.random() * 16777215).toString(16), 'line-width': 2 }
-                });
+                // 2. Exibir geometrias no Draw para edição
+                draw.current.deleteAll();
+                draw.current.add(geojson);
 
                 // 3. Zoom automático
                 const allCoords = geojson.features.flatMap(f => {
