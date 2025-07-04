@@ -38,6 +38,10 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
         Hybrid: 'mapbox://styles/mapbox/satellite-streets-v12'
     };
 
+    const [ltPronto, setLtPronto] = useState(false);
+    const [curvasProntas, setCurvasProntas] = useState(false);
+
+
     useEffect(() => {
         if (map.current) return;
 
@@ -56,15 +60,29 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
 
     useEffect(() => {
         if (!map.current) return;
+
         map.current.setStyle(style);
-        map.current.once('style.load', () => {
-            if (map.current && map.current.isStyleLoaded()) {
+
+        const checkReady = () => {
+            if (map.current.isStyleLoaded() && map.current.getStyle().layers.length > 0) {
                 setupMapExtras();
+            } else {
+                setTimeout(checkReady, 100);
             }
-        });
+        };
+
+        map.current.once('style.load', checkReady);
     }, [style]);
 
+
+
+
+
     const setupMapExtras = () => {
+        // Reset dos indicadores de carregamento
+        setLtPronto(false);
+        setCurvasProntas(false);
+
         // Remove controles anteriores
         try { if (navControl.current) map.current.removeControl(navControl.current); } catch { }
         try { if (scaleControl.current) map.current.removeControl(scaleControl.current); } catch { }
@@ -77,12 +95,7 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
             }
         } catch { }
 
-        // Remove camadas extras
-        try { if (map.current.getLayer('contour')) map.current.removeLayer('contour'); } catch { }
-        try { if (map.current.getLayer('contour-labels')) map.current.removeLayer('contour-labels'); } catch { }
-        try { if (map.current.getSource('terrain-data')) map.current.removeSource('terrain-data'); } catch { }
-
-        // Adiciona novos controles
+        // Controles
         navControl.current = new mapboxgl.NavigationControl();
         scaleControl.current = new mapboxgl.ScaleControl({ maxWidth: 100, unit: 'metric' });
         geoControl.current = new mapboxgl.GeolocateControl({
@@ -91,7 +104,6 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
             showAccuracyCircle: true,
             showUserHeading: true
         });
-
         geocoderControl.current = new MapboxGeocoder({ accessToken: mapboxgl.accessToken, mapboxgl });
 
         map.current.addControl(navControl.current, 'top-right');
@@ -99,12 +111,7 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
         map.current.addControl(geoControl.current, 'top-right');
         map.current.addControl(geocoderControl.current, 'top-left');
 
-        // Recria Draw
-        if (draw.current) {
-            try {
-                map.current.removeControl(draw.current);
-            } catch { }
-        }
+        // Redesenha Draw
         draw.current = new MapboxDraw({
             displayControlsDefault: false,
             controls: {
@@ -116,48 +123,85 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
         });
         map.current.addControl(draw.current);
 
+        // 🔁 Remove e recria curvas de nível
+        try {
+            if (map.current.getLayer("contour-labels")) map.current.removeLayer("contour-labels");
+            if (map.current.getLayer("contour")) map.current.removeLayer("contour");
+            if (map.current.getSource("terrain-data")) map.current.removeSource("terrain-data");
 
-        // Adiciona curvas de nível
-        map.current.addSource('terrain-data', {
-            type: 'vector',
-            url: 'mapbox://mapbox.mapbox-terrain-v2'
-        });
+            map.current.addSource('terrain-data', {
+                type: 'vector',
+                url: 'mapbox://mapbox.mapbox-terrain-v2'
+            });
 
-        const labelLayerId = map.current.getStyle().layers.find(
-            l => l.type === 'symbol' && l.layout?.['text-field']
-        )?.id;
+            const labelLayerId = map.current.getStyle().layers.find(
+                l => l.type === 'symbol' && l.layout?.['text-field']
+            )?.id;
 
-        map.current.addLayer({
-            id: 'contour',
-            type: 'line',
-            source: 'terrain-data',
-            'source-layer': 'contour',
-            layout: {},
-            paint: {
-                'line-color': '#ff6600',
-                'line-width': 1.2
-            }
-        }, labelLayerId);
+            map.current.addLayer({
+                id: 'contour',
+                type: 'line',
+                source: 'terrain-data',
+                'source-layer': 'contour',
+                layout: { visibility: 'visible' },
+                paint: {
+                    'line-color': '#ff6600',
+                    'line-width': 1.2
+                }
+            }, labelLayerId);
 
-        map.current.addLayer({
-            id: 'contour-labels',
-            type: 'symbol',
-            source: 'terrain-data',
-            'source-layer': 'contour',
-            layout: {
-                'symbol-placement': 'line',
-                'text-field': ['get', 'ele'],
-                'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
-                'text-size': 11
-            },
-            paint: {
-                'text-color': '#333',
-                'text-halo-color': '#fff',
-                'text-halo-width': 1
-            }
-        }, labelLayerId);
+            map.current.addLayer({
+                id: 'contour-labels',
+                type: 'symbol',
+                source: 'terrain-data',
+                'source-layer': 'contour',
+                layout: {
+                    visibility: 'visible',
+                    'symbol-placement': 'line',
+                    'text-field': ['get', 'ele'],
+                    'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+                    'text-size': 11
+                },
+                paint: {
+                    'text-color': '#333',
+                    'text-halo-color': '#fff',
+                    'text-halo-width': 1
+                }
+            }, labelLayerId);
 
+            setCurvasProntas(true);
+        } catch (err) {
+            console.error("Erro ao carregar curvas de nível:", err);
+            setCurvasProntas(false);
+        }
 
+        // 🔁 Remove e recria camada lt_existente
+        try {
+            if (map.current.getLayer("lt_existente")) map.current.removeLayer("lt_existente");
+            if (map.current.getSource("lt_existente")) map.current.removeSource("lt_existente");
+
+            map.current.addSource("lt_existente", {
+                type: "geojson",
+                data: "/dados/lt_existente.geojson",
+            });
+
+            map.current.addLayer({
+                id: "lt_existente",
+                type: "line",
+                source: "lt_existente",
+                layout: { visibility: 'visible' },
+                paint: {
+                    "line-color": "#FF0000",
+                    "line-width": 2,
+                },
+            });
+
+            setLtPronto(true);
+        } catch (err) {
+            console.error("Erro ao carregar camada lt_existente:", err);
+            setLtPronto(false);
+        }
+        // === Evento de busca via geocoder ===
         geocoderControl.current.on('result', async (e) => {
             let cidade = '';
             if (e.result.place_name) {
@@ -176,7 +220,6 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
             try {
                 const { data } = await api.post('/autofill/', { cidade });
 
-                // Preencher campos
                 document.getElementById('cidade').value = data.cidade || '';
                 document.getElementById('estado').value = data.estado || '';
                 document.getElementById('codigo_ibge').value = data.codigo_ibge || '';
@@ -187,7 +230,6 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 document.getElementById('recuo_lateral').value = data['recuo_lateral'] || '';
                 document.getElementById('campo-app').value = 'Verificar pela Lei 12.651/2012';
 
-                // Respostas da IA
                 const container = document.getElementById("resposta-ia");
                 container.innerHTML = "";
                 if (data.resposta_ia && Array.isArray(data.resposta_ia)) {
@@ -208,11 +250,7 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 setCarregandoRestricoes(false);
             }
         });
-
     };
-
-
-
 
     const enviarKMLParaBackend = (nome, geojson) => {
         console.log("Função enviarKMLParaBackend ainda não implementada:", nome);
@@ -374,14 +412,34 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 </button>
                 <button
                     onClick={() => {
-                        const visible = map.current.getLayoutProperty('contour', 'visibility') === 'visible';
-                        map.current.setLayoutProperty('contour', 'visibility', visible ? 'none' : 'visible');
-                        map.current.setLayoutProperty('contour-labels', 'visibility', visible ? 'none' : 'visible');
+                        if (!curvasProntas || !map.current.getLayer('contour') || !map.current.getLayer('contour-labels')) {
+                            console.warn("Curvas de nível ainda não carregadas.");
+                            return;
+                        }
+                        const vis = map.current.getLayoutProperty('contour', 'visibility');
+                        const newVis = vis === 'visible' ? 'none' : 'visible';
+                        map.current.setLayoutProperty('contour', 'visibility', newVis);
+                        map.current.setLayoutProperty('contour-labels', 'visibility', newVis);
                     }}
                     className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
                 >
                     Alternar Curvas de Nível
                 </button>
+
+                <button
+                    onClick={() => {
+                        if (!ltPronto || !map.current.getLayer('lt_existente')) {
+                            console.warn("Camada lt_existente ainda não carregada.");
+                            return;
+                        }
+                        const vis = map.current.getLayoutProperty('lt_existente', 'visibility');
+                        map.current.setLayoutProperty('lt_existente', 'visibility', vis === 'visible' ? 'none' : 'visible');
+                    }}
+                    className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
+                >
+                    Alternar Linhas de Transmissão
+                </button>
+
             </div>
 
             <div ref={mapContainer} className="w-full h-full" />

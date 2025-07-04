@@ -76,7 +76,7 @@ function Estudo() {
 
 
 
-            <form className="w-full mt-10 shadow-md bg-white rounded-2xl p-5">
+            {/* <form className="w-full mt-10 shadow-md bg-white rounded-2xl p-5">
                 <div className="grid grid-cols-2">
                     <div className="px-4">
                         <ArrowLeft />
@@ -157,7 +157,7 @@ function Estudo() {
 
                     <div />
                 </div>
-            </form>
+            </form> */}
         </>
     );
 }
