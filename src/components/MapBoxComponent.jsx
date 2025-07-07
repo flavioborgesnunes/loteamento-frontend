@@ -40,6 +40,9 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
 
     const [ltPronto, setLtPronto] = useState(false);
     const [curvasProntas, setCurvasProntas] = useState(false);
+    const [ltVisivel, setLtVisivel] = useState(false);
+    const [curvasVisiveis, setCurvasVisiveis] = useState(false);
+
 
 
     useEffect(() => {
@@ -82,6 +85,8 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
         // Reset dos indicadores de carregamento
         setLtPronto(false);
         setCurvasProntas(false);
+        setLtVisivel(false);
+        setCurvasVisiveis(false);
 
         // Remove controles anteriores
         try { if (navControl.current) map.current.removeControl(navControl.current); } catch { }
@@ -143,7 +148,7 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 type: 'line',
                 source: 'terrain-data',
                 'source-layer': 'contour',
-                layout: { visibility: 'visible' },
+                layout: { visibility: 'none' },
                 paint: {
                     'line-color': '#ff6600',
                     'line-width': 1.2
@@ -156,7 +161,7 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 source: 'terrain-data',
                 'source-layer': 'contour',
                 layout: {
-                    visibility: 'visible',
+                    visibility: 'none',
                     'symbol-placement': 'line',
                     'text-field': ['get', 'ele'],
                     'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
@@ -189,7 +194,7 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 id: "lt_existente",
                 type: "line",
                 source: "lt_existente",
-                layout: { visibility: 'visible' },
+                layout: { visibility: 'none' },
                 paint: {
                     "line-color": "#FF0000",
                     "line-width": 2,
@@ -416,15 +421,17 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                             console.warn("Curvas de nível ainda não carregadas.");
                             return;
                         }
-                        const vis = map.current.getLayoutProperty('contour', 'visibility');
-                        const newVis = vis === 'visible' ? 'none' : 'visible';
-                        map.current.setLayoutProperty('contour', 'visibility', newVis);
-                        map.current.setLayoutProperty('contour-labels', 'visibility', newVis);
+                        const atual = map.current.getLayoutProperty('contour', 'visibility');
+                        const novo = atual === 'visible' ? 'none' : 'visible';
+                        map.current.setLayoutProperty('contour', 'visibility', novo);
+                        map.current.setLayoutProperty('contour-labels', 'visibility', novo);
+                        setCurvasVisiveis(novo === 'visible');
                     }}
                     className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
                 >
-                    Alternar Curvas de Nível
+                    {curvasVisiveis ? "Ocultar Curvas de Nível" : "Mostrar Curvas de Nível"}
                 </button>
+
 
                 <button
                     onClick={() => {
@@ -432,13 +439,16 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                             console.warn("Camada lt_existente ainda não carregada.");
                             return;
                         }
-                        const vis = map.current.getLayoutProperty('lt_existente', 'visibility');
-                        map.current.setLayoutProperty('lt_existente', 'visibility', vis === 'visible' ? 'none' : 'visible');
+                        const atual = map.current.getLayoutProperty('lt_existente', 'visibility');
+                        const novo = atual === 'visible' ? 'none' : 'visible';
+                        map.current.setLayoutProperty('lt_existente', 'visibility', novo);
+                        setLtVisivel(novo === 'visible');
                     }}
                     className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
                 >
-                    Alternar Linhas de Transmissão
+                    {ltVisivel ? "Ocultar Linhas de Transmissão" : "Mostrar Linhas de Transmissão"}
                 </button>
+
 
             </div>
 
