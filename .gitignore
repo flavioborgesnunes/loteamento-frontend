@@ -25,3 +25,4 @@ dist-ssr
 
 # Arquivos geojson
 /public/dados/*.geojson
+/public/dados/*.mbtiles
