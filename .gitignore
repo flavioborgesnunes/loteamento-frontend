@@ -26,3 +26,4 @@ dist-ssr
 # Arquivos geojson
 /public/dados/*.geojson
 /public/dados/*.mbtiles
+cidades_nome_estado.json
