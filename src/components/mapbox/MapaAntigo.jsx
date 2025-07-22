@@ -4,7 +4,7 @@ import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import MapboxGeocoder from '@mapbox/mapbox-gl-geocoder';
 import * as toGeoJSON from '@tmcw/togeojson';
 import tokml from 'tokml';
-import api from '../utils/axios'
+import api from '../../utils/axios'
 
 import 'mapbox-gl/dist/mapbox-gl.css';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
@@ -12,7 +12,18 @@ import '@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css';
 
 mapboxgl.accessToken = 'pk.eyJ1IjoiZmxhdmlvYm9yZ2VzbnVuZXMiLCJhIjoiY21iN3hwajR2MGdnYTJqcTEzbDd2eGd6YyJ9.C_XAsxU0q4h4sEC-fDmc3A';
 
+const ESTADOS = {
+    "Acre": "AC", "Alagoas": "AL", "Amapá": "AP", "Amazonas": "AM", "Bahia": "BA", "Ceará": "CE",
+    "Distrito Federal": "DF", "Espírito Santo": "ES", "Goiás": "GO", "Maranhão": "MA", "Mato Grosso": "MT",
+    "Mato Grosso do Sul": "MS", "Minas Gerais": "MG", "Pará": "PA", "Paraíba": "PB", "Paraná": "PR",
+    "Pernambuco": "PE", "Piauí": "PI", "Rio de Janeiro": "RJ", "Rio Grande do Norte": "RN",
+    "Rio Grande do Sul": "RS", "Rondônia": "RO", "Roraima": "RR", "Santa Catarina": "SC",
+    "São Paulo": "SP", "Sergipe": "SE", "Tocantins": "TO"
+};
+const converterEstadoParaUF = (nome) => ESTADOS[nome] || null;
+
 export default function MapComponent({ className = '', setCarregandoRestricoes, setErroRestricao }) {
+
     const mapContainer = useRef(null);
     const map = useRef(null);
     const draw = useRef(new MapboxDraw({
@@ -43,7 +54,103 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
     const [ltVisivel, setLtVisivel] = useState(false);
     const [curvasVisiveis, setCurvasVisiveis] = useState(false);
 
+    const [limitesCidadesPronto, setLimitesCidadesPronto] = useState(false);
+    const [limitesCidadesVisivel, setLimitesCidadesVisivel] = useState(false);
+    const [dadosCidades, setDadosCidades] = useState(null);
+    const [ufSelecionado, setUfSelecionado] = useState(null);
 
+    const [carregandoLimites, setCarregandoLimites] = useState(false);
+
+    const handleEstadoManualChange = (e) => {
+        const uf = e.target.value;
+        if (!uf || !dadosCidades) return;
+
+        setUfSelecionado(uf);
+
+        // Filtra apenas os municípios do estado selecionado
+        const filtrado = {
+            type: "FeatureCollection",
+            features: dadosCidades.features.filter(f => f.properties.UF === uf)
+        };
+
+        try {
+            if (map.current.getLayer("limites-cidades")) map.current.removeLayer("limites-cidades");
+            if (map.current.getSource("limites-cidades")) map.current.removeSource("limites-cidades");
+
+            map.current.addSource("limites-cidades", {
+                type: "geojson",
+                data: filtrado,
+            });
+
+            map.current.addLayer({
+                id: "limites-cidades",
+                type: "line",
+                source: "limites-cidades",
+                layout: { visibility: 'visible' },
+                paint: {
+                    "line-color": "#00FF00",
+                    "line-width": 2,
+                },
+            });
+
+            setLimitesCidadesPronto(true);
+            setLimitesCidadesVisivel(true);
+        } catch (err) {
+            console.error("Erro ao carregar limites de cidades:", err);
+            setLimitesCidadesPronto(false);
+            setLimitesCidadesVisivel(false);
+        }
+    };
+
+
+
+    const filtrarPorUF = (uf) => {
+        if (!dadosCidades || !map.current) return;
+
+        setCarregandoLimites(true);
+
+        const filtrado = {
+            type: "FeatureCollection",
+            features: dadosCidades.features.filter(f => f.properties.UF === uf)
+        };
+
+        try {
+            if (map.current.getLayer("limites-cidades")) map.current.removeLayer("limites-cidades");
+            if (map.current.getSource("limites-cidades")) map.current.removeSource("limites-cidades");
+
+            map.current.addSource("limites-cidades", {
+                type: "geojson",
+                data: filtrado
+            });
+
+            map.current.addLayer({
+                id: "limites-cidades",
+                type: "line",
+                source: "limites-cidades",
+                layout: { visibility: 'none' },
+                paint: {
+                    "line-color": "#00FF00",
+                    "line-width": 2
+                }
+            });
+
+            setLimitesCidadesPronto(true);
+            setLimitesCidadesVisivel(false);
+        } catch (err) {
+            console.error("Erro ao carregar camada limites-cidades:", err);
+            setLimitesCidadesPronto(false);
+        } finally {
+            setTimeout(() => setCarregandoLimites(false), 500); // pequeno delay para UX
+        }
+    };
+
+
+    useEffect(() => {
+        fetch("/dados/cidades_brasil.geojson")
+            .then(res => res.json())
+            .then(json => setDadosCidades(json))
+            .catch(err => console.error("Erro ao carregar cidades_brasil.geojson:", err));
+    }, []);
 
     useEffect(() => {
         if (map.current) return;
@@ -76,10 +183,6 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
 
         map.current.once('style.load', checkReady);
     }, [style]);
-
-
-
-
 
     const setupMapExtras = () => {
         // Reset dos indicadores de carregamento
@@ -206,6 +309,8 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
             console.error("Erro ao carregar camada lt_existente:", err);
             setLtPronto(false);
         }
+
+
         // === Evento de busca via geocoder ===
         geocoderControl.current.on('result', async (e) => {
             let cidade = '';
@@ -213,6 +318,9 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 const partes = e.result.place_name.split(',').map(p => p.trim());
                 cidade = partes[0] || '';
             }
+
+            const estado = e.result?.context?.find(c => c.id.includes('region'))?.text || '';
+            const uf = converterEstadoParaUF(estado);
 
             if (!cidade) {
                 setErroRestricao("Cidade não reconhecida.");
@@ -224,11 +332,9 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
 
             try {
                 const { data } = await api.post('/autofill/', { cidade });
-
                 document.getElementById('cidade').value = data.cidade || '';
                 document.getElementById('estado').value = data.estado || '';
                 document.getElementById('codigo_ibge').value = data.codigo_ibge || '';
-
                 document.getElementById('campo-area-minima').value = data['campo-area-minima'] || '';
                 document.getElementById('campo-largura-calcada').value = data['campo-largura-calcada'] || '';
                 document.getElementById('recuo_frontal').value = data['recuo_frontal'] || '';
@@ -248,6 +354,11 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                     container.innerHTML = "<p class='text-gray-500 italic'>Nenhuma resposta gerada pela IA.</p>";
                 }
 
+                // Carrega os limites apenas após seleção de estado
+                if (uf) {
+                    setUfSelecionado(uf);
+                    filtrarPorUF(uf);
+                }
             } catch (err) {
                 console.error("Erro ao buscar IA:", err);
                 setErroRestricao("Erro ao buscar dados da IA.");
@@ -255,6 +366,7 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                 setCarregandoRestricoes(false);
             }
         });
+
     };
 
     const enviarKMLParaBackend = (nome, geojson) => {
@@ -391,9 +503,18 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
         URL.revokeObjectURL(url);
     };
 
+    const toggleLayer = (id, setFn, extras = []) => {
+        if (!map.current.getLayer(id)) return;
+        const atual = map.current.getLayoutProperty(id, 'visibility');
+        const novo = atual === 'visible' ? 'none' : 'visible';
+        map.current.setLayoutProperty(id, novo);
+        extras.forEach(eid => map.current.getLayer(eid) && map.current.setLayoutProperty(eid, novo));
+        setFn(novo === 'visible');
+    };
+
     return (
-        <div className={`relative w-[80%] h-[700px] bg-gray-200 rounded-lg shadow overflow-hidden ${className}`}>
-            <div className="absolute bottom-20 left-4 z-10 flex flex-col space-y-2">
+        <div className={`relative w-[80%] h-[1000px] bg-transparent rounded-lg shadow overflow-hidden ${className}`}>
+            <div className="absolute bottom-[30%] left-4 z-10 flex flex-col space-y-2">
                 {Object.entries(mapStyles).map(([name, url]) => (
                     <button
                         key={name}
@@ -404,6 +525,12 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                     </button>
                 ))}
 
+
+            </div>
+
+            <div ref={mapContainer} className="w-full h-[80%]" />
+
+            <div className='flex flex-wrap gap-5 justify-between p-3 items-center'>
                 <label className="bg-gradient-to-r from-padrao-100 to-padrao-900 px-3 py-1 text-center text-white rounded shadow hover:bg-gray-200 cursor-pointer">
                     Abrir KML
                     <input type="file" accept=".kml" onChange={handleFileUpload} className="hidden" />
@@ -427,10 +554,12 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                         map.current.setLayoutProperty('contour-labels', 'visibility', novo);
                         setCurvasVisiveis(novo === 'visible');
                     }}
-                    className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
+                    className={`px-3 py-1 rounded shadow hover:bg-gray-200 transition-all ${curvasVisiveis ? "bg-blue-100 text-blue-700" : "bg-white text-gray-800"
+                        }`}
                 >
-                    {curvasVisiveis ? "Ocultar Curvas de Nível" : "Mostrar Curvas de Nível"}
+                    {curvasVisiveis ? "👁️ Curvas de Nível" : "🚫 Curvas de Nível"}
                 </button>
+
 
 
                 <button
@@ -444,15 +573,43 @@ export default function MapComponent({ className = '', setCarregandoRestricoes, 
                         map.current.setLayoutProperty('lt_existente', 'visibility', novo);
                         setLtVisivel(novo === 'visible');
                     }}
-                    className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
+                    className={`px-3 py-1 rounded shadow hover:bg-gray-200 transition-all ${ltVisivel ? "bg-blue-100 text-blue-700" : "bg-white text-gray-800"
+                        }`}
                 >
-                    {ltVisivel ? "Ocultar Linhas de Transmissão" : "Mostrar Linhas de Transmissão"}
+                    {ltVisivel ? "👁️ linhas de Transmissão" : "🚫 Linhas de Transmissão"}
                 </button>
+
+                <select
+                    id="select-estado"
+                    onChange={(e) => {
+                        const uf = e.target.value;
+                        if (uf) {
+                            setUfSelecionado(uf);
+                            filtrarPorUF(uf);
+                        }
+                    }}
+                    className="bg-white px-3 py-1 rounded shadow border border-gray-300"
+                >
+                    <option value="">-- Selecione um estado --</option>
+                    {Object.entries(ESTADOS).map(([nome, sigla]) => (
+                        <option key={sigla} value={sigla}>{nome}</option>
+                    ))}
+                </select>
+
+                <button
+                    onClick={() => toggleLayer('limites-cidades', setLimitesCidadesVisivel)}
+                    disabled={!limitesCidadesPronto}
+                    onChange={handleEstadoManualChange}
+                    className={`px-3 py-1 rounded shadow ${limitesCidadesVisivel ? 'bg-green-600 text-white' : 'bg-gray-200 text-black'} disabled:opacity-50`}
+                >
+                    {limitesCidadesVisivel ? '👁️ Municípios' : '🚫 Municípios'}
+                </button>
+                {carregandoLimites && (
+                    <p className="text-sm text-blue-700 italic animate-pulse">⏳ Carregando limites municipais...</p>
+                )}
 
 
             </div>
-
-            <div ref={mapContainer} className="w-full h-full" />
         </div>
     );
 }

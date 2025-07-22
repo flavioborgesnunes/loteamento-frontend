@@ -8,9 +8,9 @@ import EsqueciSenha from './pages/auth/EsqueciSenha';
 import Dashboard from './pages/dashboard/Dashboard';
 import MainWrapper from './layout/mainWrapper';
 import Home from './pages/home/Home';
-import Estudo from './pages/estudo/Estudo';
 import Projetos from './pages/projetos/Projetos';
 import PerfilUsuario from './pages/auth/PerfilUsuario';
+import EstudoMapa from './pages/estudo_mapa/EstudoMapa';
 
 
 function App() {
@@ -28,7 +28,7 @@ function App() {
         <Route element={<MainWrapper />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/register-usuario" element={<RegisterUsuario />} />
-          <Route path="/estudo" element={<Estudo />} />
+          <Route path="/estudo" element={<EstudoMapa />} />
           <Route path="/projetos" element={<Projetos />} />
           <Route path="/settings" element={<PerfilUsuario />} />
         </Route>
