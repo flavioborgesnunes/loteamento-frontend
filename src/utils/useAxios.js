@@ -1,29 +1,43 @@
 import axios from 'axios';
-import { getRefreshToken, isAccessTokenExpired, setAuthUser } from './auth';
-import { API_BASE_URL } from './constants';
 import Cookies from 'js-cookie';
+import { getRefreshToken, isValidToken, setAuthUser, logout } from './auth';
+import { API_BASE_URL } from './constants';
 
 const useAxios = () => {
-    const accessToken = Cookies.get('access_token');
-    const refreshToken = Cookies.get('refresh_token');
-
     const axiosInstance = axios.create({
         baseURL: API_BASE_URL,
-        headers: { Authorization: `Bearer ${accessToken}` },
     });
 
-    axiosInstance.interceptors.request.use(async (req) => {
-        if (!isAccessTokenExpired(accessToken)) {
+    // Interceptor de requisição
+    axiosInstance.interceptors.request.use(
+        async (req) => {
+            let accessToken = Cookies.get('access_token');
+            let refreshToken = Cookies.get('refresh_token');
+
+            // Se não há token, segue sem modificar a requisição
+            if (!accessToken || !refreshToken) return req;
+
+            // Se o access token está expirado, tenta renovar
+            if (!isValidToken(accessToken)) {
+                try {
+                    const refreshed = await getRefreshToken(refreshToken);
+                    accessToken = refreshed.access;
+                    refreshToken = refreshed.refresh;
+
+                    setAuthUser(accessToken, refreshToken);
+                } catch (err) {
+                    console.error("Erro ao renovar token:", err);
+                    logout();
+                    window.location.href = '/login';
+                    return Promise.reject(err);
+                }
+            }
+
+            req.headers.Authorization = `Bearer ${accessToken}`;
             return req;
-        }
-
-        const response = await getRefreshToken(refreshToken);
-
-        setAuthUser(response.access, response.refresh);
-
-        req.headers.Authorization = `Bearer ${response.data.access}`;
-        return req;
-    });
+        },
+        (error) => Promise.reject(error)
+    );
 
     return axiosInstance;
 };
