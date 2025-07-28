@@ -13,7 +13,8 @@ import '@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css';
 
 
 
-mapboxgl.accessToken = 'pk.eyJ1IjoiZmxhdmlvYm9yZ2VzbnVuZXMiLCJhIjoiY21iN3hwajR2MGdnYTJqcTEzbDd2eGd6YyJ9.C_XAsxU0q4h4sEC-fDmc3A';
+// mapboxgl.accessToken = 'pk.eyJ1IjoiZmxhdmlvYm9yZ2VzbnVuZXMiLCJhIjoiY21iN3hwajR2MGdnYTJqcTEzbDd2eGd6YyJ9.C_XAsxU0q4h4sEC-fDmc3A';
+mapboxgl.accessToken = 'pk.eyJ1IjoibG90ZW5ldCIsImEiOiJjbWRmeHBjcDYwZ3c0MmpwdHBtMHYzdWJqIn0.pibAQlLdp4q6JabzzkZfUw';
 
 const ESTADOS = {
     "Acre": "AC", "Alagoas": "AL", "Amapá": "AP", "Amazonas": "AM", "Bahia": "BA", "Ceará": "CE",
@@ -32,33 +33,35 @@ export default function MapBoxComponent() {
     const geocoder = useRef(null);
 
     const [style, setStyle] = useState('mapbox://styles/mapbox/streets-v12');
+
     const [curvasProntas, setCurvasProntas] = useState(false);
     const [curvasVisiveis, setCurvasVisiveis] = useState(false);
+
     const [ltPronto, setLtPronto] = useState(false);
     const [ltVisivel, setLtVisivel] = useState(false);
+
     const [federalPronto, setFederalPronto] = useState(false);
     const [federalVisivel, setFederalVisivel] = useState(false);
+
     const [riosPronto, setRiosPronto] = useState(false);
     const [riosVisivel, setRiosVisivel] = useState(false);
+
     const [limitesCidadesPronto, setLimitesCidadesPronto] = useState(false);
     const [limitesCidadesVisivel, setLimitesCidadesVisivel] = useState(false);
+
+    const [estadoSelecionado, setEstadoSelecionado] = useState('');
+    const [areasProntas, setAreasProntas] = useState({});
+    const [areasVisiveis, setAreasVisiveis] = useState({});
+
     const [ufSelecionado, setUfSelecionado] = useState(null);
-    // const [dadosCidades, setDadosCidades] = useState(null);
     const [cidadesFiltradas, setCidadesFiltradas] = useState([]);
     const [carregandoCidades, setCarregandoCidades] = useState(false);
-    const [geojsonUF, setGeojsonUF] = useState(null);
-
-
-
-
-
 
     const mapStyles = {
         Streets: 'mapbox://styles/mapbox/streets-v12',
         Satellite: 'mapbox://styles/mapbox/satellite-v9',
         Hybrid: 'mapbox://styles/mapbox/satellite-streets-v12'
     };
-
 
     useEffect(() => {
         if (map.current) return;
@@ -87,6 +90,30 @@ export default function MapBoxComponent() {
         map.current.setStyle(style);
         map.current.once('style.load', setupMapExtras);
     }, [style]);
+
+    // Carrega camada ao selecionar estado
+    useEffect(() => {
+        if (estadoSelecionado) {
+            carregarAreasEstaduais(estadoSelecionado);
+        }
+    }, [estadoSelecionado]);
+
+    const mudarEstiloMapa = (styleURL, ufSelecionado) => {
+        if (!map.current) return;
+
+        map.current.setStyle(styleURL);
+
+        map.current.once('style.load', () => {
+            // 🔁 Recarrega todas as camadas personalizadas
+            setupMapExtras();
+
+            // 🔁 Recarrega áreas estaduais do estado atual
+            if (ufSelecionado) {
+                carregarAreasEstaduais(ufSelecionado);
+            }
+        });
+    };
+
 
     const setupMapExtras = () => {
         try {
@@ -137,8 +164,8 @@ export default function MapBoxComponent() {
         try {
             if (!map.current.getSource('lt_existente')) {
                 map.current.addSource('lt_existente', {
-                    type: 'geojson',
-                    data: '/dados/lt_existente.geojson'
+                    type: 'vector',
+                    url: 'mapbox://lotenet.7t4kpbhn'
                 });
             }
 
@@ -147,8 +174,12 @@ export default function MapBoxComponent() {
                     id: 'lt_existente',
                     type: 'line',
                     source: 'lt_existente',
+                    'source-layer': 'lt_existente-5porum',
                     layout: { visibility: 'none' },
-                    paint: { 'line-color': '#FF0000', 'line-width': 2 }
+                    paint: {
+                        'line-color': '#FF0000',
+                        'line-width': 2
+                    }
                 });
             }
 
@@ -156,7 +187,6 @@ export default function MapBoxComponent() {
         } catch (err) {
             console.error("Erro LT:", err);
         }
-
 
         try {
             if (!map.current.getSource('mapbox-streets')) {
@@ -172,9 +202,9 @@ export default function MapBoxComponent() {
                     type: 'line',
                     source: 'mapbox-streets',
                     'source-layer': 'waterway',
-                    filter: ['==', 'class', 'river'],
+                    filter: ['in', 'class', 'river', 'stream', 'canal', 'drain', 'ditch'],
                     layout: {
-                        visibility: 'none'  // você pode ativar por botão
+                        visibility: 'none'
                     },
                     paint: {
                         'line-color': '#0088ff',
@@ -183,17 +213,16 @@ export default function MapBoxComponent() {
                 });
             }
 
-            setRiosPronto(true); // se quiser acompanhar se já adicionou
+            setRiosPronto(true);
         } catch (err) {
             console.error("Erro rios:", err);
         }
 
-
         try {
             if (!map.current.getSource('limites_federais')) {
                 map.current.addSource('limites_federais', {
-                    type: 'geojson',
-                    data: '/dados/limites_federais_min.geojson'
+                    type: 'vector',
+                    url: 'mapbox://lotenet.abbcxn9l'
                 });
             }
 
@@ -202,17 +231,58 @@ export default function MapBoxComponent() {
                     id: 'limites_federais',
                     type: 'line',
                     source: 'limites_federais',
+                    'source-layer': 'limites_federais-3b28ea',
                     layout: { visibility: 'none' },
-                    paint: { 'line-color': '#03300B', 'line-width': 2 }
+                    paint: {
+                        'line-color': '#03300B',
+                        'line-width': 2
+                    },
+
+                    minzoom: 0,
+                    maxzoom: 24
                 });
             }
 
             setFederalPronto(true);
         } catch (err) {
-            console.error("Erro Federais:", err);
+            console.error("Erro Limites Federais:", err);
         }
-
     };
+
+    const carregarAreasEstaduais = async (uf) => {
+        const id = `areas_estaduais_${uf.toLowerCase()}`;
+        const url = `/dados/areas_${uf}.geojson`;
+
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("Arquivo não encontrado");
+
+            const data = await res.json();
+
+            if (!map.current.getSource(id)) {
+                map.current.addSource(id, {
+                    type: 'geojson',
+                    data: data,
+                });
+            }
+
+            if (!map.current.getLayer(id)) {
+                map.current.addLayer({
+                    id,
+                    type: 'line',
+                    source: id,
+                    layout: { visibility: 'none' },
+                    paint: { 'line-color': '#39ff14', 'line-width': 2 },
+                });
+            }
+
+            setAreasProntas((prev) => ({ ...prev, [uf]: true }));
+        } catch (err) {
+            console.warn(`Camada de ${uf} não encontrada:`, err.message);
+            setAreasProntas((prev) => ({ ...prev, [uf]: false }));
+        }
+    };
+
     const toggleCurvas = () => {
         const vis = map.current.getLayoutProperty('contour', 'visibility');
         const novo = vis === 'visible' ? 'none' : 'visible';
@@ -235,7 +305,6 @@ export default function MapBoxComponent() {
         setFederalVisivel(novo === 'visible');
     };
 
-
     const toggleRios = () => {
         const visibility = map.current.getLayoutProperty('rios-mapbox', 'visibility');
         const novaVisibilidade = visibility === 'visible' ? 'none' : 'visible';
@@ -252,7 +321,13 @@ export default function MapBoxComponent() {
         setLimitesCidadesVisivel(novo === 'visible');
     };
 
-
+    const toggleAreasEstaduais = (uf) => {
+        const id = `areas_estaduais_${uf.toLowerCase()}`;
+        const vis = map.current.getLayoutProperty(id, 'visibility');
+        const novo = vis === 'visible' ? 'none' : 'visible';
+        map.current.setLayoutProperty(id, 'visibility', novo);
+        setAreasVisiveis((prev) => ({ ...prev, [uf]: novo === 'visible' }));
+    };
 
     const filtrarPorUF = (uf) => {
         if (!map.current || !uf) return;
@@ -280,7 +355,7 @@ export default function MapBoxComponent() {
         if (!map.current.getSource(layerId)) {
             map.current.addSource(layerId, {
                 type: 'vector',
-                url: 'mapbox://flavioborgesnunes.1qkuej72'
+                url: 'mapbox://lotenet.59fh1i4v'
             });
 
             map.current.addLayer({
@@ -302,17 +377,6 @@ export default function MapBoxComponent() {
         setLimitesCidadesPronto(true);
         setLimitesCidadesVisivel(true);
     };
-
-
-    const getAllCoords = (geometry) => {
-        if (!geometry) return [];
-        if (geometry.type === "Point") return [geometry.coordinates];
-        if (geometry.type === "LineString") return geometry.coordinates;
-        if (geometry.type === "Polygon") return geometry.coordinates.flat();
-        if (geometry.type === "MultiPolygon") return geometry.coordinates.flat(2);
-        return [];
-    };
-
 
     const onCidadeSelecionada = async (cidadeNome) => {
         if (!cidadeNome || !ufSelecionado || !map.current) return;
@@ -359,10 +423,30 @@ export default function MapBoxComponent() {
                     return;
                 }
 
-                draw.current.deleteAll();
-                draw.current.add(geojson);
+                // 🧠 Tratamento para MultiGeometry → GeometryCollection
+                const explodedFeatures = geojson.features.flatMap(f => {
+                    const baseProps = {
+                        type: 'Feature',
+                        properties: f.properties,
+                    };
+                    if (f.geometry.type === 'GeometryCollection') {
+                        return f.geometry.geometries.map(g => ({
+                            ...baseProps,
+                            geometry: g
+                        }));
+                    } else {
+                        return [f];
+                    }
+                });
 
-                const allCoords = geojson.features.flatMap(f => {
+                draw.current.deleteAll();
+                draw.current.add({
+                    type: 'FeatureCollection',
+                    features: explodedFeatures
+                });
+
+                // 🗺️ Ajuste de visualização do mapa para as geometrias
+                const allCoords = explodedFeatures.flatMap(f => {
                     const g = f.geometry;
                     return g.type === 'Point' ? [g.coordinates] :
                         g.type === 'LineString' ? g.coordinates :
@@ -403,10 +487,11 @@ export default function MapBoxComponent() {
     };
 
     return (
-        <div className="relative w-[80%] h-[1000px] bg-transparent rounded-lg shadow overflow-hidden mt-10 mx-auto pb-50">
-            <div ref={mapContainer} className="w-full h-[80%]" />
+        <div className="relative w-[80%] h-full bg-transparent rounded-lg shadow overflow-hidden mt-10 mx-auto pb-50">
+            <div ref={mapContainer} className="w-full h-[600px]" />
 
             <ControlsPanel
+                className="h-full"
                 mapStyles={mapStyles}
                 setStyle={setStyle}
                 curvasProntas={curvasProntas}
@@ -433,11 +518,14 @@ export default function MapBoxComponent() {
                 cidadesFiltradas={cidadesFiltradas}
                 onCidadeSelecionada={onCidadeSelecionada}
                 carregandoCidades={carregandoCidades}
+                estadoSelecionado={estadoSelecionado}
+                setEstadoSelecionado={setEstadoSelecionado}
+                areasProntas={areasProntas}
+                areasVisiveis={areasVisiveis}
+                toggleAreasEstaduais={toggleAreasEstaduais}
+                mudarEstiloMapa={mudarEstiloMapa}
+                map={map.current}
             />
-
-            {/* <button onClick={() => toggleRios('rios-mapbox')}>
-                Toggle Rios Mapbox
-            </button> */}
         </div>
     );
 }

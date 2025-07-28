@@ -6,7 +6,7 @@ export default function EstudoMapa() {
     const [erroRestricao, setErroRestricao] = useState("");
 
     return (
-        <div className='flex flex-col'>
+        <div className='flex flex-col h-full'>
             <MapComponent
                 className="rounded-xl mt-10 mb-20"
                 setCarregandoRestricoes={setCarregandoRestricoes}

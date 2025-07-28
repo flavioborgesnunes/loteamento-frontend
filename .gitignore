@@ -24,6 +24,11 @@ dist-ssr
 *.sw?
 
 # Arquivos geojson
-/public/dados/*.geojson
-/public/dados/*.mbtiles
+# /public/dados/*.geojson
+# /public/dados/*.mbtiles
 cidades_nome_estado.json
+
+.env
+
+#Pastas não controladas
+/geojson(antigo)/*
