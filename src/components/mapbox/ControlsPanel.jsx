@@ -19,7 +19,7 @@ export default function ControlsPanel({
     setUfSelecionado,
     filtrarPorUF,
     onExportKML,
-    onKMLUpload,
+    onKMLorKMZUpload,
     cidadesFiltradas,
     onCidadeSelecionada,
     riosPronto,
@@ -32,7 +32,9 @@ export default function ControlsPanel({
     areasVisiveis,
     toggleAreasEstaduais,
     mudarEstiloMapa,
-    map,
+    onKMLorKMZUploadPrincipal,
+    onKMLorKMZUploadSecundario,
+    setStyle = () => { }
 }) {
     const estadoOptions = Object.entries(estados).map(([label, value]) => ({
         label,
@@ -60,14 +62,29 @@ export default function ControlsPanel({
                 ))}
 
                 {/* Ações de KML */}
-                <label className="bg-gradient-to-r from-padrao-100 to-padrao-900 px-3 py-1 text-white rounded shadow cursor-pointer">
-                    Abrir KML
-                    <input type="file" accept=".kml" onChange={onKMLUpload} className="hidden" />
-                </label>
-
-                <button onClick={onExportKML} className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200">
-                    Exportar KML
+                <label htmlFor="">KML Principal</label>
+                <input
+                    type="file"
+                    accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
+                    onChange={onKMLorKMZUploadPrincipal}
+                    className="text-sm"
+                />
+                <label htmlFor="">KML's Secundários</label>
+                <input
+                    type="file"
+                    accept=".kml"
+                    onChange={
+                        onKMLorKMZUploadSecundario
+                    }
+                    className="text-sm"
+                />
+                <button
+                    onClick={onExportKML}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-1 px-3 rounded"
+                >
+                    📤 Exportar KML Final
                 </button>
+
 
                 {/* Camadas */}
                 <button onClick={toggleCurvas} disabled={!curvasProntas}

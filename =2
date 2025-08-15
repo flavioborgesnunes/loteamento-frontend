@@ -1,0 +1,2 @@
+Requirement already satisfied: Shapely in /home/flavio/anaconda3/lib/python3.10/site-packages (2.1.0)
+Requirement already satisfied: numpy>=1.21 in /home/flavio/anaconda3/lib/python3.10/site-packages (from Shapely) (1.26.4)

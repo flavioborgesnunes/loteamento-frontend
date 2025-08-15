@@ -21,6 +21,11 @@ const MainWrapper = () => {
     const axiosAuth = useAxios();
     const navigate = useNavigate();
 
+    const displayName =
+        perfilUser?.nome
+            ? `${nome} ${sobrenome}`
+            : (perfilUser?.email || user?.email || 'Usuário');
+
     useEffect(() => {
         const handler = async () => {
             try {
@@ -123,9 +128,8 @@ const MainWrapper = () => {
                                     onClick={() => setOpen(!open)}
                                     className="inline-flex items-center gap-2 px-4 py-2 text-white bg-transparent hover:scale-105"
                                 >
-                                    <span>
-                                        {perfilUser?.nome ? `${nome} ${sobrenome}` : email}
-                                    </span>
+                                    <span>{displayName}</span>
+
                                     <ChevronDown className="w-4 h-4" />
                                 </button>
 
