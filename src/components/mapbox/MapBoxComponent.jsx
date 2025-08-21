@@ -475,77 +475,6 @@ export default function MapBoxComponent() {
         return await file.text();
     };
 
-    // ---- Helpers para Mapbox (adicionar/atualizar sources/layers) ----
-    const ensureSource = (m, id, data) => {
-        if (!m.getSource(id)) m.addSource(id, { type: 'geojson', data });
-        else m.getSource(id).setData(data);
-    };
-
-    const ensureLayer = (m, def) => { if (!m.getLayer(def.id)) m.addLayer(def); };
-
-    const secColor = (i) => {
-        const pal = ['#ff4d4f', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#1890ff', '#a0d911'];
-        return pal[i % pal.length];
-    };
-
-
-    const isPoly = (f) => {
-        const t = f?.geometry?.type;
-        return t === 'Polygon' || t === 'MultiPolygon';
-    };
-
-    const closeRings = (feature) => {
-        try {
-            const g = feature?.geometry;
-            if (!g) return feature;
-            if (g.type === 'Polygon') {
-                (g.coordinates || []).forEach(r => {
-                    if (!r?.length) return;
-                    const [fx, fy] = r[0]; const [lx, ly] = r[r.length - 1];
-                    if (fx !== lx || fy !== ly) r.push(r[0]);
-                });
-            } else if (g.type === 'MultiPolygon') {
-                (g.coordinates || []).forEach(poly => {
-                    poly.forEach(r => {
-                        if (!r?.length) return;
-                        const [fx, fy] = r[0]; const [lx, ly] = r[r.length - 1];
-                        if (fx !== lx || fy !== ly) r.push(r[0]);
-                    });
-                });
-            }
-        } catch { }
-        return feature;
-    };
-
-    const getAOIForExport = () => {
-        if (poligonoBase?.geometry?.type && isPoly(poligonoBase)) {
-            return closeRings(poligonoBase);
-        }
-        const drawInst = draw?.current;
-        if (!drawInst) throw new Error('Mapbox Draw não inicializado.');
-
-        const sel = drawInst.getSelected()?.features || [];
-        const selPolys = sel.filter(isPoly);
-        if (selPolys.length) return closeRings(selPolys.at(-1));
-
-        const all = drawInst.getAll()?.features || [];
-        const allPolys = all.filter(isPoly);
-        if (allPolys.length) return closeRings(allPolys.at(-1));
-
-        console.warn('Debug Draw:', {
-            selectedTypes: sel.map(f => f?.geometry?.type),
-            allTypes: all.map(f => f?.geometry?.type)
-        });
-        throw new Error('Nenhum polígono principal definido ou desenhado.');
-    };
-
-    const fetchWithTimeout = (url, opts = {}, ms = 300000) => {
-        const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), ms);
-        return fetch(url, { ...opts, signal: controller.signal })
-            .finally(() => clearTimeout(id));
-    };
-
     const onCidadeSelecionada = async (cidadeNome) => {
         if (!cidadeNome || !ufSelecionado || !map.current) return;
 
@@ -718,29 +647,145 @@ export default function MapBoxComponent() {
         }
     };
 
+    // ---- Helpers para Mapbox (adicionar/atualizar sources/layers) ----
+    const ensureSource = (m, id, data) => {
+        if (!m.getSource(id)) m.addSource(id, { type: 'geojson', data });
+        else m.getSource(id).setData(data);
+    };
+
+    const ensureLayer = (m, def) => { if (!m.getLayer(def.id)) m.addLayer(def); };
+
+    const secColor = (i) => {
+        const pal = ['#ff4d4f', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#1890ff', '#a0d911'];
+        return pal[i % pal.length];
+    };
+
+
+    const isPoly = (f) => {
+        const t = f?.geometry?.type;
+        return t === 'Polygon' || t === 'MultiPolygon';
+    };
+
+    const closeRings = (feature) => {
+        try {
+            const g = feature?.geometry;
+            if (!g) return feature;
+            if (g.type === 'Polygon') {
+                (g.coordinates || []).forEach(r => {
+                    if (!r?.length) return;
+                    const [fx, fy] = r[0]; const [lx, ly] = r[r.length - 1];
+                    if (fx !== lx || fy !== ly) r.push(r[0]);
+                });
+            } else if (g.type === 'MultiPolygon') {
+                (g.coordinates || []).forEach(poly => {
+                    poly.forEach(r => {
+                        if (!r?.length) return;
+                        const [fx, fy] = r[0]; const [lx, ly] = r[r.length - 1];
+                        if (fx !== lx || fy !== ly) r.push(r[0]);
+                    });
+                });
+            }
+        } catch { }
+        return feature;
+    };
+
+    const getAOIForExport = () => {
+        if (poligonoBase?.geometry?.type && isPoly(poligonoBase)) {
+            return closeRings(poligonoBase);
+        }
+        const drawInst = draw?.current;
+        if (!drawInst) throw new Error('Mapbox Draw não inicializado.');
+
+        const sel = drawInst.getSelected()?.features || [];
+        const selPolys = sel.filter(isPoly);
+        if (selPolys.length) return closeRings(selPolys.at(-1));
+
+        const all = drawInst.getAll()?.features || [];
+        const allPolys = all.filter(isPoly);
+        if (allPolys.length) return closeRings(allPolys.at(-1));
+
+        console.warn('Debug Draw:', {
+            selectedTypes: sel.map(f => f?.geometry?.type),
+            allTypes: all.map(f => f?.geometry?.type)
+        });
+        throw new Error('Nenhum polígono principal definido ou desenhado.');
+    };
+
+    const fetchWithTimeout = (url, opts = {}, ms = 300000) => {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), ms);
+        return fetch(url, { ...opts, signal: controller.signal })
+            .finally(() => clearTimeout(id));
+    };
+
+    const exportAOIAsKML = (aoiFeature, filename = 'aoi.kml') => {
+        if (!aoiFeature?.geometry) throw new Error('AOI ausente.');
+        // garante anéis fechados (usa seu helper existente)
+        const feat = closeRings({ ...aoiFeature, properties: { ...(aoiFeature.properties || {}), name: 'AOI' } });
+
+        const fc = { type: 'FeatureCollection', features: [feat] };
+        const kmlData = tokml(fc);
+        const blob = new Blob([kmlData], { type: 'application/vnd.google-earth.kml+xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
+
+
 
     const onExportKML = async () => {
         try {
             const aoiFeature = getAOIForExport();
 
+            // Descubra o que está visível (ou use seus estados booleans, como já faz)
+            const layers = {
+                rios: !!riosVisivel,                 // Mapbox Streets waterway (ou sua camada rios_waterway no banco)
+                lt: !!ltVisivel,                     // tileset 'lt_existente'
+                cidades: !!limitesCidadesVisivel,    // tileset 'limites-cidades'
+                limites_federais: !!federalVisivel,  // tileset 'limites_federais'
+                areas_estaduais: !!areasVisiveis, // se tiver um toggle; senão, mande false
+            };
+
+            // Se nenhuma camada estiver visível → exporta somente AOI local (KML rápido)
+            const algumaCamada = Object.values(layers).some(Boolean);
+            if (!algumaCamada) {
+                exportAOIAsKML(aoiFeature, 'aoi.kml');
+                return;
+            }
+
             const RAW_BASE = import.meta.env.VITE_API_BASE_URL || '';
             const API_BASE = RAW_BASE.replace(/\/+$/, '');
-            const endpoint = API_BASE ? `${API_BASE}/api/export/rios/` : `/api/export/rios/`;
+            const endpoint = API_BASE ? `${API_BASE}/api/export/mapa/` : `/api/export/mapa/`;
 
-            const payloadAOI = aoiFeature.geometry;
+            // Monte o payload
+            const payload = {
+                aoi: aoiFeature.geometry,
+                layers,
+                uf: ufSelecionado || null,      // aplica em Areas (campo Area.uf)
+                simplify: {
+                    rios: 0.00002,
+                    lt: 0.00002,
+                    polygons: 0.00005,
+                },
+                // format: "kml", // descomente se quiser forçar KML puro; default é KMZ
+            };
 
             const res = await fetchWithTimeout(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ aoi: payloadAOI })
+                body: JSON.stringify(payload),
             });
 
-            if (res.status === 204) { alert('Sem rios na área selecionada.'); return; }
+            if (res.status === 204) { alert('Nenhuma feição nas camadas selecionadas dentro do polígono.'); return; }
             if (!res.ok) {
                 const txt = await res.text().catch(() => '');
-                if (res.status === 400) throw new Error(`AOI inválida. ${txt || ''}`);
+                if (res.status === 400) throw new Error(`AOI ou parâmetros inválidos. ${txt || ''}`);
                 if (res.status === 413) throw new Error('Área muito grande / resultado volumoso (413). Reduza o polígono.');
-                throw new Error(`Falha no backend de rios (${res.status}). ${txt}`);
+                throw new Error(`Falha no backend (${res.status}). ${txt}`);
             }
 
             const blob = await res.blob();
@@ -748,7 +793,7 @@ export default function MapBoxComponent() {
 
             const cd = res.headers.get('Content-Disposition') || '';
             const m = cd.match(/filename\*=UTF-8''([^;]+)|filename="([^"]+)"/i);
-            const filename = m ? decodeURIComponent(m[1] || m[2]) : 'rios_recorte.kmz';
+            const filename = m ? decodeURIComponent(m[1] || m[2]) : 'mapa_recorte.kmz';
 
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -758,10 +803,12 @@ export default function MapBoxComponent() {
             a.remove();
             URL.revokeObjectURL(url);
         } catch (err) {
-            console.error('onExportKML:', err);
+            console.error('onExportKML (unificado):', err);
             alert(err.message || String(err));
         }
     };
+
+
 
     return (
         <div className="relative w-[80%] h-full bg-transparent rounded-lg shadow overflow-hidden mt-10 mx-auto pb-50">
