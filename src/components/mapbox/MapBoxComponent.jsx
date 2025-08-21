@@ -648,6 +648,131 @@ export default function MapBoxComponent() {
     };
 
     // ---- Helpers para Mapbox (adicionar/atualizar sources/layers) ----
+
+
+    /** Garante um MultiPolygon para operar recortes com Turf */
+    function getAOIMultiPolygon(aoiFeature) {
+        if (!aoiFeature) throw new Error('AOI ausente.');
+        const g = aoiFeature.geometry;
+        if (!g) throw new Error('AOI sem geometria.');
+        if (g.type === 'Polygon') {
+            return { type: 'Feature', geometry: { type: 'MultiPolygon', coordinates: [g.coordinates] }, properties: {} };
+        }
+        if (g.type === 'MultiPolygon') {
+            return { type: 'Feature', geometry: g, properties: {} };
+        }
+        throw new Error(`AOI precisa ser Polygon/MultiPolygon. Veio: ${g.type}`);
+    }
+
+    /** Recorta uma *feature* por uma AOI (MultiPolygon) */
+    function clipFeatureByAOI(feat, aoiMP) {
+        const type = feat?.geometry?.type;
+        if (!type) return null;
+
+        // Polígonos: interseção direta
+        if (type === 'Polygon' || type === 'MultiPolygon') {
+            try {
+                const inter = turf.intersect(feat, aoiMP);
+                return inter || null;
+            } catch { return null; }
+        }
+
+        // Linhas: split + filtra trechos cujo centroide está dentro da AOI
+        // Linhas: split + filtra trechos cujo centroide está dentro da AOI
+        if (type === 'LineString' || type === 'MultiLineString') {
+            try {
+                // Explode para tratar cada linha
+                const exploded = type === 'MultiLineString'
+                    ? turf.flatten(feat) // FC de LineString
+                    : { type: 'FeatureCollection', features: [feat] };
+
+                const kept = [];
+                for (const f of exploded.features) {
+                    // Para cada polígono do MultiPolygon, converta o polígono em linhas
+                    const polyLines = [];
+                    for (const rings of aoiMP.geometry.coordinates) {
+                        const poly = { type: 'Feature', geometry: { type: 'Polygon', coordinates: rings }, properties: {} };
+                        const asLine = turf.polygonToLine(poly); // pode retornar LineString ou MultiLineString
+                        const linesFC = asLine.type === 'FeatureCollection'
+                            ? asLine
+                            : (asLine.geometry.type === 'MultiLineString'
+                                ? turf.flatten(asLine)
+                                : { type: 'FeatureCollection', features: [asLine] });
+                        polyLines.push(...linesFC.features);
+                    }
+
+                    // Split iterativamente a linha pelos contornos da AOI
+                    let frags = [f];
+                    for (const splitter of polyLines) {
+                        const out = turf.lineSplit(
+                            { type: 'FeatureCollection', features: frags },
+                            splitter
+                        );
+                        frags = out.features.length ? out.features : frags;
+                    }
+
+                    // Fica só com fragmentos cujo ponto médio está dentro da AOI
+                    for (const seg of frags) {
+                        const mid = turf.along(seg, turf.length(seg) / 2);
+                        if (turf.booleanPointInPolygon(mid, aoiMP)) {
+                            kept.push(seg);
+                        }
+                    }
+                }
+
+                if (!kept.length) return null;
+                if (kept.length === 1) return kept[0];
+                return turf.featureCollection(kept);
+            } catch {
+                return null;
+            }
+        }
+
+
+        // Outros tipos: ignorar
+        return null;
+    }
+
+    /** Aplica recorte em todos os overlays secundários carregados (array [{id, data}]) */
+    function clipSecondaryOverlaysWithinAOI(secOverlays, aoiFeature, simplify = {}) {
+        if (!Array.isArray(secOverlays) || !secOverlays.length) return null;
+
+        const aoiMP = getAOIMultiPolygon(aoiFeature);
+        const acc = [];
+
+        for (const overlay of secOverlays) {
+            const src = overlay?.data;
+            if (!src?.features?.length) continue;
+
+            for (const feat of src.features) {
+                const clipped = clipFeatureByAOI(feat, aoiMP);
+                if (!clipped) continue;
+
+                // clipped pode ser Feature ou FeatureCollection (no caso de linhas)
+                const pushFeat = (f) => {
+                    let out = f;
+                    // Simplificação opcional
+                    if (simplify?.tolerance && (f.geometry.type !== 'Point')) {
+                        try { out = turf.simplify(f, { tolerance: simplify.tolerance, highQuality: false }); } catch { }
+                    }
+                    // Anota origem (id do overlay) para facilitar estilo/legenda no backend
+                    out.properties = { ...(out.properties || {}), __overlay_id: overlay.id };
+                    acc.push(out);
+                };
+
+                if (clipped.type === 'FeatureCollection') {
+                    for (const f of clipped.features) pushFeat(f);
+                } else {
+                    pushFeat(clipped);
+                }
+            }
+        }
+
+        if (!acc.length) return null;
+        return { type: 'FeatureCollection', features: acc };
+    }
+
+
     const ensureSource = (m, id, data) => {
         if (!m.getSource(id)) m.addSource(id, { type: 'geojson', data });
         else m.getSource(id).setData(data);
@@ -737,22 +862,35 @@ export default function MapBoxComponent() {
 
 
 
+    // IMPORTANTE: adicione o helper no topo do arquivo onde está onExportKML
+    // import { clipSecondaryOverlaysWithinAOI } from './utils/clipOverlays';
+
     const onExportKML = async () => {
         try {
             const aoiFeature = getAOIForExport();
+            if (!aoiFeature) {
+                alert("Nenhum polígono principal definido.");
+                return;
+            }
 
-            // Descubra o que está visível (ou use seus estados booleans, como já faz)
+            const clippedOverlays = clipSecondaryOverlaysWithinAOI(
+                secOverlays,
+                aoiFeature,
+                { tolerance: 0.00002 }
+            );
+
             const layers = {
-                rios: !!riosVisivel,                 // Mapbox Streets waterway (ou sua camada rios_waterway no banco)
-                lt: !!ltVisivel,                     // tileset 'lt_existente'
-                cidades: !!limitesCidadesVisivel,    // tileset 'limites-cidades'
-                limites_federais: !!federalVisivel,  // tileset 'limites_federais'
-                areas_estaduais: !!areasVisiveis, // se tiver um toggle; senão, mande false
+                rios: !!riosVisivel,
+                lt: !!ltVisivel,
+                cidades: !!limitesCidadesVisivel,
+                limites_federais: !!federalVisivel,
+                areas_estaduais: !!areasVisiveis,
             };
 
-            // Se nenhuma camada estiver visível → exporta somente AOI local (KML rápido)
             const algumaCamada = Object.values(layers).some(Boolean);
-            if (!algumaCamada) {
+            const temOverlays = !!(clippedOverlays && clippedOverlays.features?.length);
+
+            if (!algumaCamada && !temOverlays) {
                 exportAOIAsKML(aoiFeature, 'aoi.kml');
                 return;
             }
@@ -761,18 +899,45 @@ export default function MapBoxComponent() {
             const API_BASE = RAW_BASE.replace(/\/+$/, '');
             const endpoint = API_BASE ? `${API_BASE}/api/export/mapa/` : `/api/export/mapa/`;
 
-            // Monte o payload
+            // 👉 Sempre mandar um FeatureCollection (mesmo vazio), nunca null
+
+            // Junta TODOS os KMLs secundários originais em um único FC
+            const overlaysRawFC = {
+                type: 'FeatureCollection',
+                features: (secOverlays || []).flatMap(ov => {
+                    const feats = ov?.data?.features || [];
+                    return feats.map(f => ({
+                        ...f,
+                        // marca origem para cor/legenda no backend
+                        properties: { ...(f.properties || {}), __overlay_id: ov.id }
+                    }));
+                })
+            };
+
+            // 👉 continua mandando o recorte do cliente (se existir) — ajuda na performance
+            const overlaysFC = temOverlays ? clippedOverlays : { type: 'FeatureCollection', features: [] };
+
             const payload = {
                 aoi: aoiFeature.geometry,
+                overlays: overlaysFC,        // NUNCA null
+                overlays_raw: overlaysRawFC, // NOVO: servidor recorta de qualquer forma
                 layers,
-                uf: ufSelecionado || null,      // aplica em Areas (campo Area.uf)
-                simplify: {
-                    rios: 0.00002,
-                    lt: 0.00002,
-                    polygons: 0.00005,
-                },
-                // format: "kml", // descomente se quiser forçar KML puro; default é KMZ
+                uf: ufSelecionado || null,
+                simplify: { rios: 0.00002, lt: 0.00002, polygons: 0.00005 },
+                // format: "kml",
             };
+
+            console.log('DEBUG export payload:',
+                'overlays(recortado)=', payload.overlays.features.length,
+                'overlays_raw=', payload.overlays_raw.features.length
+            );
+
+
+
+            console.log('DEBUG export payload:', {
+                overlaysFeatures: payload.overlays.features?.length,
+                layers
+            });
 
             const res = await fetchWithTimeout(endpoint, {
                 method: 'POST',
@@ -780,7 +945,7 @@ export default function MapBoxComponent() {
                 body: JSON.stringify(payload),
             });
 
-            if (res.status === 204) { alert('Nenhuma feição nas camadas selecionadas dentro do polígono.'); return; }
+            if (res.status === 204) { alert('Nenhuma feição nas camadas/overlays dentro do polígono.'); return; }
             if (!res.ok) {
                 const txt = await res.text().catch(() => '');
                 if (res.status === 400) throw new Error(`AOI ou parâmetros inválidos. ${txt || ''}`);
@@ -793,7 +958,7 @@ export default function MapBoxComponent() {
 
             const cd = res.headers.get('Content-Disposition') || '';
             const m = cd.match(/filename\*=UTF-8''([^;]+)|filename="([^"]+)"/i);
-            const filename = m ? decodeURIComponent(m[1] || m[2]) : 'mapa_recorte.kmz';
+            const filename = m ? decodeURIComponent(m[1] || m[2]) : (temOverlays ? 'mapa_recorte_com_overlays.kmz' : 'mapa_recorte.kmz');
 
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -803,10 +968,12 @@ export default function MapBoxComponent() {
             a.remove();
             URL.revokeObjectURL(url);
         } catch (err) {
-            console.error('onExportKML (unificado):', err);
+            console.error('onExportKML (unificado+overlays):', err);
             alert(err.message || String(err));
         }
     };
+
+
 
 
 
