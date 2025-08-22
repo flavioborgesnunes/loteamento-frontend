@@ -8,6 +8,9 @@ export default function ControlsPanel({
     ltPronto,
     ltVisivel,
     toggleLT,
+    MFPronto,
+    MFVisivel,
+    toggleMF,
     federalPronto,
     federalVisivel,
     toggleFederais,
@@ -72,7 +75,7 @@ export default function ControlsPanel({
                 <label htmlFor="">KML's Secundários</label>
                 <input
                     type="file"
-                    accept=".kml"
+                    accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
                     onChange={
                         onKMLorKMZUploadSecundario
                     }
@@ -95,6 +98,11 @@ export default function ControlsPanel({
                 <button onClick={toggleLT} disabled={!ltPronto}
                     className={`px-3 py-1 rounded shadow hover:bg-gray-200 ${ltVisivel ? "bg-blue-100 text-blue-700" : "bg-white text-gray-800"}`}>
                     {ltVisivel ? "👁️ Linhas de Transmissão" : "🚫 Linhas de Transmissão"}
+                </button>
+
+                <button onClick={toggleMF} disabled={!MFPronto}
+                    className={`px-3 py-1 rounded shadow hover:bg-gray-200 ${MFVisivel ? "bg-blue-100 text-blue-700" : "bg-white text-gray-800"}`}>
+                    {MFVisivel ? "👁️ Malha Ferroviária" : "🚫 Malha Ferroviária"}
                 </button>
 
                 <button onClick={toggleFederais} disabled={!federalPronto}

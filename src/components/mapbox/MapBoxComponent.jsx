@@ -37,6 +37,9 @@ export default function MapBoxComponent() {
     const [ltPronto, setLtPronto] = useState(false);
     const [ltVisivel, setLtVisivel] = useState(false);
 
+    const [MFPronto, setMFPronto] = useState(false);
+    const [MFVisivel, setMFVisivel] = useState(false);
+
     const [federalPronto, setFederalPronto] = useState(false);
     const [federalVisivel, setFederalVisivel] = useState(false);
 
@@ -265,6 +268,28 @@ export default function MapBoxComponent() {
         }
 
         try {
+            if (!map.current.getSource('malha_ferroviaria')) {
+                map.current.addSource('malha_ferroviaria', {
+                    type: 'vector',
+                    url: 'mapbox://lotenet.bddhm8nd'
+                });
+            }
+            if (!map.current.getLayer('malha_ferroviaria')) {
+                map.current.addLayer({
+                    id: 'malha_ferroviaria',
+                    type: 'line',
+                    source: 'malha_ferroviaria',
+                    'source-layer': 'malha_ferroviaria_antt_2025-6re4xi',
+                    layout: { visibility: 'none' },
+                    paint: { 'line-color': '#8B4513', 'line-width': 2 }
+                });
+            }
+            setMFPronto(true);
+        } catch (err) {
+            console.error("Erro Mlha Ferroviária:", err);
+        }
+
+        try {
             if (!map.current.getSource('mapbox-streets')) {
                 map.current.addSource('mapbox-streets', {
                     type: 'vector',
@@ -352,6 +377,13 @@ export default function MapBoxComponent() {
         const novo = vis === 'visible' ? 'none' : 'visible';
         map.current.setLayoutProperty('lt_existente', 'visibility', novo);
         setLtVisivel(novo === 'visible');
+    };
+
+    const toggleMF = () => {
+        const vis = map.current.getLayoutProperty('malha_ferroviaria', 'visibility');
+        const novo = vis === 'visible' ? 'none' : 'visible';
+        map.current.setLayoutProperty('malha_ferroviaria', 'visibility', novo);
+        setMFVisivel(novo === 'visible');
     };
 
     const toggleFederais = () => {
@@ -862,8 +894,7 @@ export default function MapBoxComponent() {
 
 
 
-    // IMPORTANTE: adicione o helper no topo do arquivo onde está onExportKML
-    // import { clipSecondaryOverlaysWithinAOI } from './utils/clipOverlays';
+    // FUNÇÃO DE EXPORT-----------------------------------------
 
     const onExportKML = async () => {
         try {
@@ -882,6 +913,7 @@ export default function MapBoxComponent() {
             const layers = {
                 rios: !!riosVisivel,
                 lt: !!ltVisivel,
+                mf: !!MFVisivel,
                 cidades: !!limitesCidadesVisivel,
                 limites_federais: !!federalVisivel,
                 areas_estaduais: !!areasVisiveis,
@@ -923,7 +955,7 @@ export default function MapBoxComponent() {
                 overlays_raw: overlaysRawFC, // NOVO: servidor recorta de qualquer forma
                 layers,
                 uf: ufSelecionado || null,
-                simplify: { rios: 0.00002, lt: 0.00002, polygons: 0.00005 },
+                simplify: { rios: 0.00002, lt: 0.00002, mf: 0.00002, polygons: 0.00005 },
                 // format: "kml",
             };
 
@@ -991,6 +1023,9 @@ export default function MapBoxComponent() {
                 ltPronto={ltPronto}
                 ltVisivel={ltVisivel}
                 toggleLT={toggleLT}
+                MFPronto={MFPronto}
+                MFVisivel={MFVisivel}
+                toggleMF={toggleMF}
                 federalPronto={federalPronto}
                 federalVisivel={federalVisivel}
                 riosPronto={riosPronto}
