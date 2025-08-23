@@ -22,7 +22,7 @@ export default function ControlsPanel({
     setUfSelecionado,
     filtrarPorUF,
     onExportKML,
-    onKMLorKMZUpload,
+    onKMLorKMZUploadPrincipal,
     cidadesFiltradas,
     onCidadeSelecionada,
     riosPronto,
@@ -35,8 +35,9 @@ export default function ControlsPanel({
     areasVisiveis,
     toggleAreasEstaduais,
     mudarEstiloMapa,
-    onKMLorKMZUploadPrincipal,
-    onKMLorKMZUploadSecundario,
+    // NOVO:
+    onOpenKMLSecModal,
+    secOverlays,
     setStyle = () => { }
 }) {
     const estadoOptions = Object.entries(estados).map(([label, value]) => ({
@@ -59,34 +60,57 @@ export default function ControlsPanel({
 
                 {/* Estilos de mapa */}
                 {Object.entries(mapStyles).map(([name, url]) => (
-                    <button key={name} onClick={() => mudarEstiloMapa(url, ufSelecionado)} className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200">
+                    <button
+                        key={name}
+                        onClick={() => setStyle(url)}
+                        className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
+                    >
                         {name}
                     </button>
                 ))}
 
                 {/* Ações de KML */}
-                <label htmlFor="">KML Principal</label>
+                <label>KML Principal</label>
                 <input
                     type="file"
                     accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
                     onChange={onKMLorKMZUploadPrincipal}
                     className="text-sm"
                 />
-                <label htmlFor="">KML's Secundários</label>
-                <input
-                    type="file"
-                    accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
-                    onChange={
-                        onKMLorKMZUploadSecundario
-                    }
-                    className="text-sm"
-                />
+
+                <button
+                    onClick={onOpenKMLSecModal}
+                    className="bg-white px-3 py-1 rounded shadow hover:bg-gray-200"
+                >
+                    ➕ Adicionar KML Secundário
+                </button>
+
                 <button
                     onClick={onExportKML}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-1 px-3 rounded"
                 >
                     📤 Exportar KML Final
                 </button>
+
+                {/*chips de secundários já carregados */}
+                {Array.isArray(secOverlays) && secOverlays.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                        {secOverlays.map((ov, i) => (
+                            <span
+                                key={ov.id}
+                                className="inline-flex items-center gap-2 rounded-full border px-2 py-1 text-sm"
+                                title={ov.id}
+                            >
+                                <span
+                                    className="inline-block h-3 w-3 rounded-full"
+                                    style={{ background: ov.color }}
+                                />
+                                {ov.name}
+                            </span>
+                        ))}
+                    </div>
+                )}
+
 
 
                 {/* Camadas */}

@@ -10,6 +10,7 @@ import * as turf from '@turf/turf';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import '@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css';
+import ModalKMLsSecundarios from './components/ModalKMLsSecundarios'
 
 // mapboxgl.accessToken = 'pk.eyJ1IjoiZmxhdmlvYm9yZ2VzbnVuZXMiLCJhIjoiY21iN3hwajR2MGdnYTJqcTEzbDd2eGd6YyJ9.C_XAsxU0q4h4sEC-fDmc3A';
 mapboxgl.accessToken = 'pk.eyJ1IjoibG90ZW5ldCIsImEiOiJjbWRmeHBjcDYwZ3c0MmpwdHBtMHYzdWJqIn0.pibAQlLdp4q6JabzzkZfUw';
@@ -60,11 +61,14 @@ export default function MapBoxComponent() {
     // 💾 estado para AOI e Rios carregados (para reidratar após trocar o estilo)
     const [aoiGeoJSON, setAoiGeoJSON] = useState(null);
     const [riosGeoJSON, setRiosGeoJSON] = useState(null);
+
     // AOI principal para export (Polygon/MultiPolygon)
     const [poligonoBase, setPoligonoBase] = useState(null);
 
-    const [secOverlays, setSecOverlays] = useState([]); // [{id, data}]
+    const [secOverlays, setSecOverlays] = useState([]);
     const secCounter = useRef(0);
+
+    const [showSecModal, setShowSecModal] = useState(false);
 
     const mapStyles = {
         Streets: 'mapbox://styles/mapbox/streets-v12',
@@ -122,7 +126,7 @@ export default function MapBoxComponent() {
             // reidrata overlays secundários
             secOverlays.forEach((ov, idx) => {
                 ensureSource(map.current, ov.id, ov.data);
-                const color = secColor(idx);
+                const color = ov.color || secColor(idx);
                 ensureLayer(map.current, {
                     id: `${ov.id}-fill`,
                     type: 'fill',
@@ -163,9 +167,11 @@ export default function MapBoxComponent() {
         });
     };
 
-    const addOrUpdateSource = (m, id, data, asAOI = false, asRios = false) => {
+    const addOrUpdateSource = (m, id, data, asAOI = false) => {
         if (!m.getSource(id)) {
             m.addSource(id, { type: 'geojson', data });
+
+            // Se for a AOI principal, adiciona fill + line
             if (asAOI) {
                 if (!m.getLayer('aoi_kml-fill')) {
                     m.addLayer({
@@ -186,21 +192,11 @@ export default function MapBoxComponent() {
                     });
                 }
             }
-            if (asRios) {
-                if (!m.getLayer('rios_kmz-line')) {
-                    m.addLayer({
-                        id: 'rios_kmz-line',
-                        type: 'line',
-                        source: id,
-                        paint: { 'line-width': 2, 'line-color': '#4169E1' },
-                        filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
-                    });
-                }
-            }
         } else {
             m.getSource(id).setData(data);
         }
     };
+
 
     const setupMapExtras = () => {
         try {
@@ -373,6 +369,7 @@ export default function MapBoxComponent() {
     };
 
     const toggleLT = () => {
+        if (!map.current.getLayer('lt_existente')) return;
         const vis = map.current.getLayoutProperty('lt_existente', 'visibility');
         const novo = vis === 'visible' ? 'none' : 'visible';
         map.current.setLayoutProperty('lt_existente', 'visibility', novo);
@@ -460,6 +457,7 @@ export default function MapBoxComponent() {
     };
 
     // ---- Helpers para KML/KMZ ----
+
     const parseKMLTextToGeoJSON = (kmlText) => {
         const dom = new DOMParser().parseFromString(kmlText, 'text/xml');
         return toGeoJSON.kml(dom); // FeatureCollection
@@ -612,72 +610,84 @@ export default function MapBoxComponent() {
     };
 
     // KML/KMZ SECUNDÁRIO (pode abrir vários para sobrepor ao principal)
-    const onKMLorKMZUploadSecundario = async (e) => {
-        const files = Array.from(e.target.files || []);
-        if (!files.length) return;
 
+    const handleAddSecondaryKML = async ({ file, name }) => {
         try {
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const kmlText = await readKMLorKMZFile(file);
-                let fc = parseKMLTextToGeoJSON(kmlText);
-                if (!fc?.features?.length) { console.warn('KML/KMZ secundário vazio:', file.name); continue; }
+            // lê arquivo
+            const kmlText = await readKMLorKMZFile(file);
+            let fc = parseKMLTextToGeoJSON(kmlText);
+            if (!fc?.features?.length) {
+                alert(`KML/KMZ "${file.name}" está vazio.`);
+                return;
+            }
 
-                fc = explodeGeometryCollections(fc);
-                const { polysFC, linesFC } = splitByGeomType(fc);
+            // explode e separe
+            fc = explodeGeometryCollections(fc);
+            const { polysFC, linesFC } = splitByGeomType(fc);
+            const combined = {
+                type: 'FeatureCollection',
+                features: [...(polysFC.features || []), ...(linesFC.features || [])]
+            };
+            if (!combined.features.length) {
+                alert(`Nenhum polígono/linha utilizável em "${file.name}".`);
+                return;
+            }
 
-                // junta polígonos e linhas num único source; layers vão filtrar por tipo
-                const combined = { type: 'FeatureCollection', features: [...(polysFC.features || []), ...(linesFC.features || [])] };
-                if (!combined.features.length) continue;
+            // id/cores e marcação de origem
+            const id = `kml_sec_${++secCounter.current}_${slugify(name)}`;
+            const color = secColor(secCounter.current - 1);
 
-                const id = `kml_sec_${++secCounter.current}`;
-                ensureSource(map.current, id, combined);
+            // anota o nome no properties (ajuda na exportação)
+            combined.features = combined.features.map(f => ({
+                ...f,
+                properties: { ...(f.properties || {}), __overlay_id: name }
+            }));
 
-                const color = secColor(secCounter.current - 1);
+            // adiciona no mapa
+            ensureSource(map.current, id, combined);
 
-                // polígonos (fill + outline)
-                ensureLayer(map.current, {
-                    id: `${id}-fill`,
-                    type: 'fill',
-                    source: id,
-                    paint: { 'fill-color': color, 'fill-opacity': 0.12 },
-                    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-                });
-                ensureLayer(map.current, {
-                    id: `${id}-outline`,
-                    type: 'line',
-                    source: id,
-                    paint: { 'line-color': color, 'line-width': 2 },
-                    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-                });
+            // layers (fill/outline/line)
+            ensureLayer(map.current, {
+                id: `${id}-fill`,
+                type: 'fill',
+                source: id,
+                paint: { 'fill-color': color, 'fill-opacity': 0.12 },
+                filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+            });
+            ensureLayer(map.current, {
+                id: `${id}-outline`,
+                type: 'line',
+                source: id,
+                paint: { 'line-color': color, 'line-width': 2 },
+                filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+            });
+            ensureLayer(map.current, {
+                id: `${id}-line`,
+                type: 'line',
+                source: id,
+                paint: { 'line-color': color, 'line-width': 2 },
+                filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
+            });
 
-                // linhas
-                ensureLayer(map.current, {
-                    id: `${id}-line`,
-                    type: 'line',
-                    source: id,
-                    paint: { 'line-color': color, 'line-width': 2 },
-                    filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
-                });
+            // guarda para reidratar e exportar
+            setSecOverlays(prev => [...prev, { id, name, color, data: combined }]);
 
-                // guarda na lista para reidratar depois
-                setSecOverlays(prev => [...prev, { id, data: combined }]);
-
-                // se não houver AOI ainda, encaixe a vista no secundário
-                if (!aoiGeoJSON) {
-                    try {
-                        const bbox = turf.bbox(combined);
-                        map.current.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 0 });
-                    } catch { }
-                }
+            // fit se não houver AOI ainda
+            if (!aoiGeoJSON) {
+                try {
+                    const bbox = turf.bbox(combined);
+                    map.current.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 0 });
+                } catch { }
             }
         } catch (err) {
             console.error(err);
-            alert(`Erro ao abrir KML/KMZ secundário: ${err.message || err}`);
+            alert(`Erro ao abrir "${file?.name}": ${err.message || err}`);
         } finally {
-            e.target.value = null;
+            setShowSecModal(false);
         }
     };
+
+
 
     // ---- Helpers para Mapbox (adicionar/atualizar sources/layers) ----
 
@@ -788,8 +798,7 @@ export default function MapBoxComponent() {
                         try { out = turf.simplify(f, { tolerance: simplify.tolerance, highQuality: false }); } catch { }
                     }
                     // Anota origem (id do overlay) para facilitar estilo/legenda no backend
-                    out.properties = { ...(out.properties || {}), __overlay_id: overlay.id };
-                    acc.push(out);
+                    out.properties = { ...(out.properties || {}), __overlay_id: overlay.name }; acc.push(out);
                 };
 
                 if (clipped.type === 'FeatureCollection') {
@@ -812,10 +821,16 @@ export default function MapBoxComponent() {
 
     const ensureLayer = (m, def) => { if (!m.getLayer(def.id)) m.addLayer(def); };
 
-    const secColor = (i) => {
-        const pal = ['#ff4d4f', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#1890ff', '#a0d911'];
-        return pal[i % pal.length];
-    };
+    const slugify = (s) =>
+        (s || "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-zA-Z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .toLowerCase() || "overlay";
+
+    const secPalette = ['#ff4d4f', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#1890ff', '#a0d911'];
+    const secColor = (i) => secPalette[i % secPalette.length];
+
 
 
     const isPoly = (f) => {
@@ -892,105 +907,111 @@ export default function MapBoxComponent() {
         URL.revokeObjectURL(url);
     };
 
-
-
     // FUNÇÃO DE EXPORT-----------------------------------------
 
     const onExportKML = async () => {
         try {
-            const aoiFeature = getAOIForExport();
+            // 1) AOI: usa a existente; se não houver, usa BBox dos secundários
+            let aoiFeature = null;
+            try {
+                aoiFeature = getAOIForExport(); // sua função atual
+            } catch (e) {
+                if (secOverlays.length) {
+                    const fcAll = {
+                        type: "FeatureCollection",
+                        features: secOverlays.flatMap(ov => ov?.data?.features || [])
+                    };
+                    if (fcAll.features.length) {
+                        const [minX, minY, maxX, maxY] = turf.bbox(fcAll);
+                        aoiFeature = turf.bboxPolygon([minX, minY, maxX, maxY]);
+                    }
+                }
+            }
             if (!aoiFeature) {
-                alert("Nenhum polígono principal definido.");
+                alert("Nenhum polígono principal definido e nenhum secundário carregado.");
                 return;
             }
 
-            const clippedOverlays = clipSecondaryOverlaysWithinAOI(
-                secOverlays,
-                aoiFeature,
-                { tolerance: 0.00002 }
-            );
+            // 2) Overlays: considere como "tem overlays" se houver qualquer secundário carregado
+            const hasSecondary = (secOverlays || []).some(ov => (ov?.data?.features || []).length > 0);
 
+            // FC recortado no cliente (opcional, você já tem a função)
+            const clippedOverlays =
+                hasSecondary
+                    ? clipSecondaryOverlaysWithinAOI(
+                        // mande o "nome amigável" como id lógico
+                        secOverlays.map(({ name, data }) => ({ id: name, data })),
+                        aoiFeature,
+                        { tolerance: 0.00002 }
+                    )
+                    : { type: 'FeatureCollection', features: [] };
+
+            // FC bruto (para o back recortar também, se quiser manter)
+            const overlaysRawFC = hasSecondary
+                ? {
+                    type: 'FeatureCollection',
+                    features: (secOverlays || []).flatMap(ov => {
+                        const feats = ov?.data?.features || [];
+                        return feats.map(f => ({
+                            ...f,
+                            properties: { ...(f.properties || {}), __overlay_id: ov.name } // <- NOME do modal
+                        }));
+                    })
+                }
+                : { type: 'FeatureCollection', features: [] };
+
+            // 3) Flags de camadas (como já fazia)
             const layers = {
                 rios: !!riosVisivel,
                 lt: !!ltVisivel,
                 mf: !!MFVisivel,
                 cidades: !!limitesCidadesVisivel,
                 limites_federais: !!federalVisivel,
-                areas_estaduais: !!areasVisiveis,
+                areas_estaduais: Object.values(areasVisiveis || {}).some(Boolean),
             };
 
             const algumaCamada = Object.values(layers).some(Boolean);
-            const temOverlays = !!(clippedOverlays && clippedOverlays.features?.length);
+            const temOverlays = hasSecondary; // <<< chave: usa hasSecondary
 
+            // 4) Se não tem camadas ligadas e também não tem secundários,
+            //    aí sim exporta só a AOI. Caso contrário, vai pro backend.
             if (!algumaCamada && !temOverlays) {
                 exportAOIAsKML(aoiFeature, 'aoi.kml');
                 return;
             }
 
+            const overlaysFC = clippedOverlays || { type: 'FeatureCollection', features: [] };
+
+            // 5) POST pro backend
             const RAW_BASE = import.meta.env.VITE_API_BASE_URL || '';
             const API_BASE = RAW_BASE.replace(/\/+$/, '');
             const endpoint = API_BASE ? `${API_BASE}/api/export/mapa/` : `/api/export/mapa/`;
 
-            // 👉 Sempre mandar um FeatureCollection (mesmo vazio), nunca null
-
-            // Junta TODOS os KMLs secundários originais em um único FC
-            const overlaysRawFC = {
-                type: 'FeatureCollection',
-                features: (secOverlays || []).flatMap(ov => {
-                    const feats = ov?.data?.features || [];
-                    return feats.map(f => ({
-                        ...f,
-                        // marca origem para cor/legenda no backend
-                        properties: { ...(f.properties || {}), __overlay_id: ov.id }
-                    }));
-                })
-            };
-
-            // 👉 continua mandando o recorte do cliente (se existir) — ajuda na performance
-            const overlaysFC = temOverlays ? clippedOverlays : { type: 'FeatureCollection', features: [] };
-
             const payload = {
-                aoi: aoiFeature.geometry,
-                overlays: overlaysFC,        // NUNCA null
-                overlays_raw: overlaysRawFC, // NOVO: servidor recorta de qualquer forma
+                aoi: aoiFeature.geometry, // pode ser Polygon, ok
+                overlays: overlaysFC,
+                overlays_raw: overlaysRawFC,
                 layers,
                 uf: ufSelecionado || null,
                 simplify: { rios: 0.00002, lt: 0.00002, mf: 0.00002, polygons: 0.00005 },
-                // format: "kml",
             };
 
-            console.log('DEBUG export payload:',
-                'overlays(recortado)=', payload.overlays.features.length,
-                'overlays_raw=', payload.overlays_raw.features.length
-            );
-
-
-
-            console.log('DEBUG export payload:', {
-                overlaysFeatures: payload.overlays.features?.length,
-                layers
-            });
-
-            const res = await fetchWithTimeout(endpoint, {
+            const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             });
 
-            if (res.status === 204) { alert('Nenhuma feição nas camadas/overlays dentro do polígono.'); return; }
+            if (res.status === 204) { alert('Nada para exportar dentro da AOI.'); return; }
             if (!res.ok) {
                 const txt = await res.text().catch(() => '');
-                if (res.status === 400) throw new Error(`AOI ou parâmetros inválidos. ${txt || ''}`);
-                if (res.status === 413) throw new Error('Área muito grande / resultado volumoso (413). Reduza o polígono.');
                 throw new Error(`Falha no backend (${res.status}). ${txt}`);
             }
 
             const blob = await res.blob();
-            if (!blob || blob.size === 0) throw new Error('Arquivo vazio recebido.');
-
             const cd = res.headers.get('Content-Disposition') || '';
             const m = cd.match(/filename\*=UTF-8''([^;]+)|filename="([^"]+)"/i);
-            const filename = m ? decodeURIComponent(m[1] || m[2]) : (temOverlays ? 'mapa_recorte_com_overlays.kmz' : 'mapa_recorte.kmz');
+            const filename = m ? decodeURIComponent(m[1] || m[2]) : 'mapa_recorte.kmz';
 
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1000,13 +1021,10 @@ export default function MapBoxComponent() {
             a.remove();
             URL.revokeObjectURL(url);
         } catch (err) {
-            console.error('onExportKML (unificado+overlays):', err);
+            console.error(err);
             alert(err.message || String(err));
         }
     };
-
-
-
 
 
     return (
@@ -1052,8 +1070,19 @@ export default function MapBoxComponent() {
                 mudarEstiloMapa={mudarEstiloMapa}
                 map={map.current}
                 onKMLorKMZUploadPrincipal={onKMLorKMZUploadPrincipal}
-                onKMLorKMZUploadSecundario={onKMLorKMZUploadSecundario}
+
+
+                onOpenKMLSecModal={() => setShowSecModal(true)}
+                secOverlays={secOverlays}
+
             />
+
+            <ModalKMLsSecundarios
+                isOpen={showSecModal}
+                onClose={() => setShowSecModal(false)}
+                onConfirm={handleAddSecondaryKML}
+            />
+
         </div>
     );
 }
