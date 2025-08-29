@@ -4,6 +4,7 @@ import mapboxgl from "mapbox-gl";
 import * as turf from "@turf/turf";
 import useAxios from "../../utils/useAxios";
 import "mapbox-gl/dist/mapbox-gl.css";
+import Swal from "sweetalert2";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -63,6 +64,39 @@ function upsertOverlay(map, overlayId, fc, color) {
     // 🔑 força visível mesmo se a layer já existia com 'none'
     setOverlayVisibility(map, overlayId, true);
 }
+
+// --- Permissão/alerta ---
+const isProjectEditor = (user, proj) => {
+    if (!user || !proj) return false;
+    // superuser/staff sempre podem
+    if (user.is_superuser || user.is_staff) return true;
+    // dono ou owner do projeto
+    const uid = String(user.id);
+    return uid === String(proj.dono) || uid === String(proj.owner) || (user.role === "dono" && uid === String(proj.dono));
+};
+
+const ownerLabelFrom = (proj) => {
+    if (!proj) return "usuário autorizado";
+
+    const name = proj.owner_nome || proj.dono_nome;
+    const email = proj.owner_email || proj.dono_email;
+
+    if (name) return `usuário ${name}`;
+    if (email) return `usuário ${email}`;
+    if (proj.owner) return `usuário #${proj.owner}`;
+    if (proj.dono) return `usuário #${proj.dono}`;
+    return "usuário autorizado";
+};
+
+const denyEditAlert = (proj) => {
+    const who = ownerLabelFrom(proj);
+    return Swal.fire({
+        icon: "warning",
+        title: "Permissão negada",
+        text: `Somente o ${who} pode alterar esse projeto.`,
+        confirmButtonText: "OK",
+    });
+};
 
 
 export default function VisualizarProjetos() {
@@ -220,7 +254,6 @@ export default function VisualizarProjetos() {
         }
     }
 
-
     async function loadOverlayGeoJSON(projId, overlayId) {
         const { data } = await axiosAuth.get(`projetos/${projId}/features/`, {
             params: { overlay_id: overlayId, simplified: true },
@@ -248,7 +281,13 @@ export default function VisualizarProjetos() {
         }));
     }
 
+    // === GUARD DE PERMISSÃO (SweetAlert) PARA AÇÕES DE OVERLAY ===
     async function renameOverlay(overlayId, newId) {
+        // 🚫 bloqueio por permissão
+        if (!isProjectEditor(me, summary)) {
+            await denyEditAlert(summary);
+            return;
+        }
         if (!newId || newId === overlayId) return;
         try {
             await axiosAuth.patch(`projetos/${summary.id}/overlay/`, { overlay_id: overlayId, new_overlay_id: newId });
@@ -278,6 +317,11 @@ export default function VisualizarProjetos() {
     }
 
     async function recolorOverlay(overlayId, color) {
+        // 🚫 bloqueio por permissão
+        if (!isProjectEditor(me, summary)) {
+            await denyEditAlert(summary);
+            return;
+        }
         try {
             await axiosAuth.patch(`projetos/${summary.id}/overlay/`, { overlay_id: overlayId, color });
             // atualiza cor no mapa
@@ -297,6 +341,11 @@ export default function VisualizarProjetos() {
     }
 
     async function deleteOverlay(overlayId) {
+        // 🚫 bloqueio por permissão
+        if (!isProjectEditor(me, summary)) {
+            await denyEditAlert(summary);
+            return;
+        }
         if (!confirm(`Remover overlay "${overlayId}"?`)) return;
         try {
             await axiosAuth.delete(`projetos/${summary.id}/overlay/delete/`, {
@@ -371,6 +420,12 @@ export default function VisualizarProjetos() {
 
     async function saveProject() {
         if (!editingId) return;
+        // 🚫 bloqueio por permissão (caso alguém entre em modo edição sem poder)
+        const proj = projects.find((p) => String(p.id) === String(editingId));
+        if (proj && !isProjectEditor(me, proj)) {
+            await denyEditAlert(proj);
+            return;
+        }
         try {
             await axiosAuth.patch(`projetos/${editingId}/`, form);
             setEditingId(null);
@@ -385,6 +440,12 @@ export default function VisualizarProjetos() {
     }
 
     async function deleteProject(id) {
+        const proj = projects.find((p) => String(p.id) === String(id));
+        // 🚫 bloqueio por permissão na exclusão via lista
+        if (proj && !isProjectEditor(me, proj)) {
+            await denyEditAlert(proj);
+            return;
+        }
         if (!confirm("Excluir projeto? Esta ação é irreversível.")) return;
         try {
             await axiosAuth.delete(`projetos/${id}/`);
@@ -403,6 +464,23 @@ export default function VisualizarProjetos() {
     function startEdit(p) {
         setEditingId(p.id);
         setForm({ name: p.name, description: p.description || "", uf: p.uf || "" });
+    }
+
+    // Wrappers de UI para lista (usam SweetAlert quando não tem permissão)
+    function handleStartEdit(p) {
+        if (!isProjectEditor(me, p)) {
+            denyEditAlert(p);
+            return;
+        }
+        startEdit(p);
+    }
+
+    function handleDeleteProject(p) {
+        if (!isProjectEditor(me, p)) {
+            denyEditAlert(p);
+            return;
+        }
+        deleteProject(p.id);
     }
 
     return (
@@ -427,16 +505,16 @@ export default function VisualizarProjetos() {
                                     {p.name}
                                 </button>
                                 <div className="flex gap-2">
-                                    <button onClick={() => startEdit(p)} className="text-xs px-2 py-1 rounded bg-yellow-100">
+                                    <button onClick={() => handleStartEdit(p)} className="text-xs px-2 py-1 rounded bg-yellow-100">
                                         Editar
                                     </button>
-                                    <button onClick={() => deleteProject(p.id)} className="text-xs px-2 py-1 rounded bg-red-100">
+                                    <button onClick={() => handleDeleteProject(p)} className="text-xs px-2 py-1 rounded bg-red-100">
                                         Excluir
                                     </button>
                                 </div>
                             </div>
                             <div className="text-xs text-gray-600">
-                                UF: {p.uf || "-"} • Dono #{p.dono} • Owner #{p.owner}
+                                UF: {p.uf || "-"} • Dono #{p.dono} • Owner: {p.owner_nome}
                             </div>
                         </div>
                     ))}
@@ -572,7 +650,4 @@ export default function VisualizarProjetos() {
             </div>
         </div>
     );
-
-
 }
-
