@@ -85,12 +85,12 @@ export default function ControlsPanel({
                     ➕ Adicionar KML Secundário
                 </button>
 
-                <button
+                {/* <button
                     onClick={onExportKML}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm py-1 px-3 rounded"
                 >
                     📤 Exportar KML Final
-                </button>
+                </button> */}
 
                 {/*chips de secundários já carregados */}
                 {Array.isArray(secOverlays) && secOverlays.length > 0 && (

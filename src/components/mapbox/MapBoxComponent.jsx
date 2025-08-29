@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
+import useAxios from '../../utils/useAxios'
 import mapboxgl from 'mapbox-gl';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import MapboxGeocoder from '@mapbox/mapbox-gl-geocoder';
 import * as toGeoJSON from '@tmcw/togeojson';
 import tokml from 'tokml';
 import ControlsPanel from './ControlsPanel';
+import ProjetoFormNoMapa from './components/ProjetoFormNoMapa';
 import * as turf from '@turf/turf';
 
 import 'mapbox-gl/dist/mapbox-gl.css';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import '@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css';
-import ModalKMLsSecundarios from './components/ModalKMLsSecundarios'
+import ModalKMLsSecundarios from './components/ModalKMLsSecundarios';
 
 // mapboxgl.accessToken = 'pk.eyJ1IjoiZmxhdmlvYm9yZ2VzbnVuZXMiLCJhIjoiY21iN3hwajR2MGdnYTJqcTEzbDd2eGd6YyJ9.C_XAsxU0q4h4sEC-fDmc3A';
 mapboxgl.accessToken = 'pk.eyJ1IjoibG90ZW5ldCIsImEiOiJjbWRmeHBjcDYwZ3c0MmpwdHBtMHYzdWJqIn0.pibAQlLdp4q6JabzzkZfUw';
@@ -25,6 +27,9 @@ const ESTADOS = {
 };
 
 export default function MapBoxComponent() {
+    const axiosAuth = useAxios();
+    const exportandoRef = useRef(false);
+
     const mapContainer = useRef(null);
     const map = useRef(null);
     const draw = useRef(null);
@@ -69,6 +74,10 @@ export default function MapBoxComponent() {
     const secCounter = useRef(0);
 
     const [showSecModal, setShowSecModal] = useState(false);
+
+    // Formulário criação:
+    const [projectName, setProjectName] = useState("");
+    const [projectDesc, setProjectDesc] = useState("");
 
     const mapStyles = {
         Streets: 'mapbox://styles/mapbox/streets-v12',
@@ -883,13 +892,6 @@ export default function MapBoxComponent() {
         throw new Error('Nenhum polígono principal definido ou desenhado.');
     };
 
-    const fetchWithTimeout = (url, opts = {}, ms = 300000) => {
-        const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), ms);
-        return fetch(url, { ...opts, signal: controller.signal })
-            .finally(() => clearTimeout(id));
-    };
-
     const exportAOIAsKML = (aoiFeature, filename = 'aoi.kml') => {
         if (!aoiFeature?.geometry) throw new Error('AOI ausente.');
         // garante anéis fechados (usa seu helper existente)
@@ -909,58 +911,30 @@ export default function MapBoxComponent() {
 
     // FUNÇÃO DE EXPORT-----------------------------------------
 
-    const onExportKML = async () => {
+    const onExportKML = async ({
+        projectName,
+        projectDescription = "",
+        uf = "",
+        outFormat = "kmz",
+    } = {}) => {
         try {
-            // 1) AOI: usa a existente; se não houver, usa BBox dos secundários
+            // 1) Tenta obter a AOI; se não existir, usa o bbox dos overlays como fallback
             let aoiFeature = null;
             try {
                 aoiFeature = getAOIForExport(); // sua função atual
             } catch (e) {
-                if (secOverlays.length) {
-                    const fcAll = {
-                        type: "FeatureCollection",
-                        features: secOverlays.flatMap(ov => ov?.data?.features || [])
-                    };
-                    if (fcAll.features.length) {
-                        const [minX, minY, maxX, maxY] = turf.bbox(fcAll);
-                        aoiFeature = turf.bboxPolygon([minX, minY, maxX, maxY]);
-                    }
+                const feats = (secOverlays || []).flatMap(ov => ov?.data?.features || []);
+                if (feats.length) {
+                    const [minX, minY, maxX, maxY] = turf.bbox({ type: "FeatureCollection", features: feats });
+                    aoiFeature = turf.bboxPolygon([minX, minY, maxX, maxY]);
                 }
             }
-            if (!aoiFeature) {
-                alert("Nenhum polígono principal definido e nenhum secundário carregado.");
+            if (!aoiFeature?.geometry) {
+                alert("Defina um polígono principal (AOI) ou carregue overlays para gerar uma AOI automática.");
                 return;
             }
 
-            // 2) Overlays: considere como "tem overlays" se houver qualquer secundário carregado
-            const hasSecondary = (secOverlays || []).some(ov => (ov?.data?.features || []).length > 0);
-
-            // FC recortado no cliente (opcional, você já tem a função)
-            const clippedOverlays =
-                hasSecondary
-                    ? clipSecondaryOverlaysWithinAOI(
-                        // mande o "nome amigável" como id lógico
-                        secOverlays.map(({ name, data }) => ({ id: name, data })),
-                        aoiFeature,
-                        { tolerance: 0.00002 }
-                    )
-                    : { type: 'FeatureCollection', features: [] };
-
-            // FC bruto (para o back recortar também, se quiser manter)
-            const overlaysRawFC = hasSecondary
-                ? {
-                    type: 'FeatureCollection',
-                    features: (secOverlays || []).flatMap(ov => {
-                        const feats = ov?.data?.features || [];
-                        return feats.map(f => ({
-                            ...f,
-                            properties: { ...(f.properties || {}), __overlay_id: ov.name } // <- NOME do modal
-                        }));
-                    })
-                }
-                : { type: 'FeatureCollection', features: [] };
-
-            // 3) Flags de camadas (como já fazia)
+            // 2) Flags de camadas (igual você já usa na UI)
             const layers = {
                 rios: !!riosVisivel,
                 lt: !!ltVisivel,
@@ -970,66 +944,140 @@ export default function MapBoxComponent() {
                 areas_estaduais: Object.values(areasVisiveis || {}).some(Boolean),
             };
 
-            const algumaCamada = Object.values(layers).some(Boolean);
-            const temOverlays = hasSecondary; // <<< chave: usa hasSecondary
-
-            // 4) Se não tem camadas ligadas e também não tem secundários,
-            //    aí sim exporta só a AOI. Caso contrário, vai pro backend.
-            if (!algumaCamada && !temOverlays) {
-                exportAOIAsKML(aoiFeature, 'aoi.kml');
-                return;
-            }
-
-            const overlaysFC = clippedOverlays || { type: 'FeatureCollection', features: [] };
-
-            // 5) POST pro backend
-            const RAW_BASE = import.meta.env.VITE_API_BASE_URL || '';
-            const API_BASE = RAW_BASE.replace(/\/+$/, '');
-            const endpoint = API_BASE ? `${API_BASE}/api/export/mapa/` : `/api/export/mapa/`;
-
-            const payload = {
-                aoi: aoiFeature.geometry, // pode ser Polygon, ok
-                overlays: overlaysFC,
-                overlays_raw: overlaysRawFC,
-                layers,
-                uf: ufSelecionado || null,
-                simplify: { rios: 0.00002, lt: 0.00002, mf: 0.00002, polygons: 0.00005 },
+            // 3) Overlays secundários (enviamos "raw" para o servidor recortar)
+            //    Mantemos __overlay_id e __color, se presentes.
+            const overlaysRaw = {
+                type: "FeatureCollection",
+                features: (secOverlays || []).flatMap(ov => {
+                    const overlayId = ov?.name || "overlay";
+                    const color = ov?.color || null;
+                    const feats = ov?.data?.features || [];
+                    return feats.map(f => ({
+                        type: "Feature",
+                        properties: {
+                            ...(f.properties || {}),
+                            __overlay_id: f?.properties?.__overlay_id || overlayId,
+                            __color: f?.properties?.__color || color,
+                        },
+                        geometry: f.geometry,
+                    }));
+                }),
             };
 
-            const res = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
+            // (Opcional) Se você também quiser mandar já recortado (cliente),
+            // o backend vai preferir overlays_raw; mas manteremos por compat:
+            const clippedOverlays = clipSecondaryOverlaysWithinAOI(
+                secOverlays.map(({ name, data, color }) => ({ id: name, data, color })),
+                aoiFeature,
+                { tolerance: 0.00002 }
+            );
+
+            const overlaysClippedFC = {
+                type: "FeatureCollection",
+                features: (clippedOverlays || []).flatMap(ov => {
+                    const overlayId = ov?.id || "overlay";
+                    const feats = ov?.data?.features || [];
+                    return feats.map(f => ({
+                        type: "Feature",
+                        properties: {
+                            ...(f.properties || {}),
+                            __overlay_id: f?.properties?.__overlay_id || overlayId,
+                            __color: f?.properties?.__color || ov?.color || null,
+                        },
+                        geometry: f.geometry,
+                    }));
+                }),
+            };
+
+            // 4) Tolerâncias de simplificação (ajuste conforme sua UX)
+            const simplify = {
+                rios: 0.00002,
+                lt: 0.00002,
+                mf: 0.00002,
+                polygons: 0.00005,
+            };
+
+            // 5) Monta payload conforme o serializer do backend
+            const payload = {
+                project_name: projectName || `Projeto ${new Date().toLocaleString()}`,
+                project_description: projectDescription || "",
+                uf: uf || "",
+                aoi: aoiFeature.geometry,       // aceita Polygon/MultiPolygon/Feature/FC (backend normaliza)
+                layers,
+                simplify,
+                overlays_raw: overlaysRaw,      // servidor recorta e persiste no PostGIS
+                overlays: overlaysClippedFC,    // opcional (será ignorado se overlays_raw tiver features)
+                format: outFormat,              // "kmz" ou "kml"
+                persist: true,                  // padrão true; mantém explícito
+            };
+
+            // 6) Chama o endpoint que CRIA o projeto, SALVA os overlays e DEVOLVE o KMZ
+            const res = await axiosAuth.post("projetos/exportar/", payload, {
+                responseType: "blob",
             });
 
-            if (res.status === 204) { alert('Nada para exportar dentro da AOI.'); return; }
-            if (!res.ok) {
-                const txt = await res.text().catch(() => '');
-                throw new Error(`Falha no backend (${res.status}). ${txt}`);
-            }
+            // 7) Extrai nome de arquivo do header (se houver)
+            const dispo = res.headers?.["content-disposition"] || "";
+            const m = /filename="?([^"]+)"?/i.exec(dispo);
+            const filename = m?.[1] || (outFormat === "kml" ? "mapa_recorte.kml" : "mapa_recorte.kmz");
 
-            const blob = await res.blob();
-            const cd = res.headers.get('Content-Disposition') || '';
-            const m = cd.match(/filename\*=UTF-8''([^;]+)|filename="([^"]+)"/i);
-            const filename = m ? decodeURIComponent(m[1] || m[2]) : 'mapa_recorte.kmz';
-
+            // 8) Baixa o arquivo
+            const blob = new Blob([res.data], {
+                type: res.headers?.["content-type"] || (outFormat === "kml"
+                    ? "application/vnd.google-earth.kml+xml"
+                    : "application/vnd.google-earth.kmz"),
+            });
             const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
+            const a = document.createElement("a");
             a.href = url; a.download = filename;
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
+
+            // Dica: se quiser, aqui você pode disparar um toast de sucesso
+            // e/ou recarregar uma lista de projetos recentes na sua UI.
         } catch (err) {
             console.error(err);
-            alert(err.message || String(err));
+            // mensagens mais amigáveis
+            const msg = await (async () => {
+                try {
+                    if (err?.response) {
+                        const text = await err.response.data.text?.();
+                        return text || `Falha no backend (${err.response.status}).`;
+                    }
+                } catch { }
+                return err?.message || "Falha ao exportar.";
+            })();
+            alert(msg);
         }
     };
+
+
+
+
+    async function handleProjetoFormSubmit({ name, description, uf }) {
+        await onExportKML({
+            projectName: name,
+            projectDescription: description,
+            uf,
+            outFormat: "kmz",
+        });
+    }
+
+
+
 
 
     return (
         <div className="relative w-[80%] h-full bg-transparent rounded-lg shadow overflow-hidden mt-10 mx-auto pb-50">
             <div ref={mapContainer} className="w-full h-[600px]" />
+
+            <ProjetoFormNoMapa
+                defaultUF={ufSelecionado}
+                onSubmit={handleProjetoFormSubmit}
+            />
+
 
             <ControlsPanel
                 className="h-full"
@@ -1070,7 +1118,6 @@ export default function MapBoxComponent() {
                 mudarEstiloMapa={mudarEstiloMapa}
                 map={map.current}
                 onKMLorKMZUploadPrincipal={onKMLorKMZUploadPrincipal}
-
 
                 onOpenKMLSecModal={() => setShowSecModal(true)}
                 secOverlays={secOverlays}
