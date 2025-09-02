@@ -5,7 +5,7 @@ import { Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { logout } from '../utils/auth'
 import bgBase from '../components/base/bg-base.png';
-import { Bell, User, CircleUserRound, Settings, FileUp, Brain, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut, UserRoundPlus, Eye } from 'lucide-react';
+import { Bell, User, CircleUserRound, Settings, FileUp, Brain, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut, UserRoundPlus, Eye, MapPlus } from 'lucide-react';
 import ItemMenu from '../components/base/ItemMenu';
 import logo from '../pages/auth/images/logoctz.png';
 
@@ -75,10 +75,10 @@ const MainWrapper = () => {
                             <img src={logo} className='pt-15 pb-8 mb-5 w-50 border-b-2 border-b-gray-200' />
                             <ItemMenu icon={LayoutDashboard} text="Dashboard" to="/dashboard" />
                             <ItemMenu icon={FileUp} text="Novo Estudo" to="/estudo" />
-                            <ItemMenu icon={Brain} text="Estudo com AI" to="/ia" />
                             <ItemMenu icon={MonitorDown} text="Projetos" to="/projetos" />
                             <ItemMenu icon={Eye} text="Visualizar" to="/visualizar-projetos" />
-                            <ItemMenu icon={Home} text="Dashboard" to="#" />
+                            <ItemMenu icon={MapPlus} text="Loteador" to="/loteador" />
+                            <ItemMenu icon={Brain} text="Estudo com AI" to="/ia" />
                             {(user.role === 'dono' || user.role === 'adm') && (
 
                                 <ItemMenu icon={UserRoundPlus} text="Cadastra Usuário" to="/register-usuario" />

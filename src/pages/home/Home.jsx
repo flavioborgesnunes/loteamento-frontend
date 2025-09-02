@@ -6,7 +6,7 @@ function Home() {
     return (
         <div>
             <p>Home</p>
-            <Link to={"/login"}>Login</Link>
+            <Link to={"/dashboard"}>dashboard</Link>
         </div>
     )
 }

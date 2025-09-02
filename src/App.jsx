@@ -12,6 +12,7 @@ import Projetos from './pages/projetos/Projetos';
 import PerfilUsuario from './pages/auth/PerfilUsuario';
 import EstudoMapa from './pages/estudo_mapa/EstudoMapa';
 import VisualizarProjetos from './pages/visualizar/VisualizarProjetos';
+import GeomanLoteador from './pages/geoman/GeomanLoteador';
 
 
 function App() {
@@ -31,6 +32,7 @@ function App() {
           <Route path="/register-usuario" element={<RegisterUsuario />} />
           <Route path="/estudo" element={<EstudoMapa />} />
           <Route path="/projetos" element={<Projetos />} />
+          <Route path="/loteador" element={<GeomanLoteador />} />
           <Route path="/visualizar-projetos" element={<VisualizarProjetos />} />
           <Route path="/settings" element={<PerfilUsuario />} />
         </Route>
