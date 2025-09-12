@@ -52,4 +52,22 @@ body {
     opacity: 1;
   }
 
+
+  /* Sobe TUDO que é controle do Leaflet/Geoman */
+.leaflet-container .leaflet-top,
+.leaflet-container .leaflet-bottom {
+  z-index: 2147483647 !important; /* praticamente o topo do universo */
+}
+
+/* Garante a barra do Geoman ainda acima */
+.leaflet-control.leaflet-pm-toolbar {
+  z-index: 2147483647 !important;
+}
+
+/* (opcional) caso algum wrapper esteja “cortando” os controles */
+.leaflet-control-container {
+  overflow: visible !important;
+}
+
+
   
