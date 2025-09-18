@@ -2,9 +2,9 @@
 import * as turf from "@turf/turf";
 import * as mpc from "martinez-polygon-clipping";
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Polygon-Clipping (Martinez) shim
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 const pc = {
     union: mpc.union,
     intersection: mpc.intersection,
@@ -12,7 +12,9 @@ const pc = {
     xor: mpc.xor,
 };
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Debug
+// ---------------------------------------------------------------------------
 export const DEBUG = true;
 export function DBG(tag, obj) {
     if (!DEBUG) return;
@@ -45,21 +47,29 @@ export function logAreas(tag, streetMaskWgs, aoiWgs, clipped) {
     }
 }
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Helpers gerais / conversões
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
-// ---------- Debug helpers extras ----------
 export function describeFeature(label, f) {
     try {
         const typ = f?.geometry?.type || f?.type || typeof f;
-        const area = (f && (f.geometry?.type === "Polygon" || f.geometry?.type === "MultiPolygon")) ? turf.area(f) : 0;
+        const area =
+            f &&
+                (f.geometry?.type === "Polygon" ||
+                    f.geometry?.type === "MultiPolygon")
+                ? turf.area(f)
+                : 0;
         const bbox = safeBBox(f);
-        const b = bbox ? { minX: bbox[0], minY: bbox[1], maxX: bbox[2], maxY: bbox[3] } : null;
+        const b = bbox
+            ? { minX: bbox[0], minY: bbox[1], maxX: bbox[2], maxY: bbox[3] }
+            : null;
         const rings =
-            f?.geometry?.type === "Polygon" ? f.geometry.coordinates?.length :
-                f?.geometry?.type === "MultiPolygon" ? f.geometry.coordinates?.reduce((acc, p) => acc + (p?.length || 0), 0) :
-                    0;
+            f?.geometry?.type === "Polygon"
+                ? f.geometry.coordinates?.length
+                : f?.geometry?.type === "MultiPolygon"
+                    ? f.geometry.coordinates?.reduce((acc, p) => acc + (p?.length || 0), 0)
+                    : 0;
         DBG(`[describe:${label}]`, { type: typ, rings, area_m2: area, bbox: b });
     } catch (e) {
         console.warn(`[describe:${label}] fail`, e);
@@ -67,9 +77,12 @@ export function describeFeature(label, f) {
 }
 
 export function booleanIntersectsSafe(a, b) {
-    try { return turf.booleanIntersects(a, b); } catch { return false; }
+    try {
+        return turf.booleanIntersects(a, b);
+    } catch {
+        return false;
+    }
 }
-
 
 /** Deep clone seguro p/ GeoJSON simples. */
 function dclone(obj) {
@@ -80,37 +93,23 @@ function dclone(obj) {
     }
 }
 
-/** Normaliza para FeatureCollection (filtra nulos). */
-function toFeatureCollection(input) {
-    if (!input) return { type: "FeatureCollection", features: [] };
+/** Garante FeatureCollection (filtra nulos). */
+export function toFeatureCollection(input) {
+    if (!input) return turf.featureCollection([]);
     if (input.type === "FeatureCollection") {
         const feats = (input.features || []).filter((f) => f && f.geometry);
-        return {
-            type: "FeatureCollection",
-            features: feats.map((f) => dclone(f)),
-        };
+        return turf.featureCollection(feats.map((f) => dclone(f)));
     }
     if (input.type === "Feature") {
-        if (!input.geometry)
-            return { type: "FeatureCollection", features: [] };
-        return {
-            type: "FeatureCollection",
-            features: [dclone(input)],
-        };
+        if (!input.geometry) return turf.featureCollection([]);
+        return turf.featureCollection([dclone(input)]);
     }
     if (input.type && input.coordinates) {
-        return {
-            type: "FeatureCollection",
-            features: [
-                {
-                    type: "Feature",
-                    geometry: dclone(input),
-                    properties: {},
-                },
-            ],
-        };
+        return turf.featureCollection([
+            { type: "Feature", geometry: dclone(input), properties: {} },
+        ]);
     }
-    return { type: "FeatureCollection", features: [] };
+    return turf.featureCollection([]);
 }
 
 /** BBox [minX, minY, maxX, maxY]; null se vazio. */
@@ -164,10 +163,7 @@ export function ensureClosedPolygon(poly) {
 /** Snap + clean + rewind (outer CCW) em WGS84. */
 export function snapWgs(f, precision = 6) {
     try {
-        return turf.truncate(turf.cleanCoords(f), {
-            precision,
-            mutate: false,
-        });
+        return turf.truncate(turf.cleanCoords(f), { precision, mutate: false });
     } catch {
         return f;
     }
@@ -197,16 +193,12 @@ export function ensureFeaturePolygon(input, label = "geom") {
         }
         return turf.cleanCoords(union);
     }
-    throw new Error(
-        `${label} precisa ser Polygon/MultiPolygon (atual: ${g.type})`
-    );
+    throw new Error(`${label} precisa ser Polygon/MultiPolygon (atual: ${g.type})`);
 }
 
 /** Converte Poly WGS84 → Métrico (Mercator), com “cura” leve. */
 export function toMercatorPolySafe(f, label) {
-    const clean = ensureClosedPolygon(
-        ensureFeaturePolygon(rewindOuter(snapWgs(f)), label)
-    );
+    const clean = ensureClosedPolygon(ensureFeaturePolygon(rewindOuter(snapWgs(f)), label));
     let fm = turf.toMercator(clean);
     try {
         fm = turf.buffer(fm, 0, { units: "meters" });
@@ -234,8 +226,7 @@ function toMercatorPolyLoose(f) {
 /** Fecha anel [x,y]. */
 const closeRing = (ring) => {
     if (!ring?.length) return ring;
-    const a = ring[0],
-        b = ring[ring.length - 1];
+    const a = ring[0], b = ring[ring.length - 1];
     if (a[0] !== b[0] || a[1] !== b[1]) return [...ring, [a[0], a[1]]];
     return ring;
 };
@@ -245,8 +236,7 @@ export function toPcMultiPolygon(fMerc) {
     const g = fMerc?.geometry;
     if (!g) return [];
     if (g.type === "Polygon") return [g.coordinates.map(closeRing)];
-    if (g.type === "MultiPolygon")
-        return g.coordinates.map((poly) => poly.map(closeRing));
+    if (g.type === "MultiPolygon") return g.coordinates.map((poly) => poly.map(closeRing));
     return [];
 }
 
@@ -271,7 +261,6 @@ function orientAndCloseWgs(feature) {
     }
     return f;
 }
-
 
 /** Resultado polygon-clipping → Feature (Mercator). */
 export function pcResultToFeature(mp) {
@@ -307,9 +296,9 @@ export function featureWithOriginal(f, originFmt = "geojson") {
     return feat;
 }
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Métricas e validação
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 const AREA_EPS = 1e-4;
 
 function isValidPoly(feat) {
@@ -329,21 +318,12 @@ function combineAsMultiPolygon(a, b) {
     if (!isValidPoly(a) && !isValidPoly(b)) return null;
     if (!isValidPoly(a)) return turf.cleanCoords(b);
     if (!isValidPoly(b)) return turf.cleanCoords(a);
-    const aCoords =
-        a.geometry.type === "Polygon"
-            ? [a.geometry.coordinates]
-            : a.geometry.coordinates;
-    const bCoords =
-        b.geometry.type === "Polygon"
-            ? [b.geometry.coordinates]
-            : b.geometry.coordinates;
+    const aCoords = a.geometry.type === "Polygon" ? [a.geometry.coordinates] : a.geometry.coordinates;
+    const bCoords = b.geometry.type === "Polygon" ? [b.geometry.coordinates] : b.geometry.coordinates;
     return turf.cleanCoords({
         type: "Feature",
         properties: {},
-        geometry: {
-            type: "MultiPolygon",
-            coordinates: [...aCoords, ...bCoords],
-        },
+        geometry: { type: "MultiPolygon", coordinates: [...aCoords, ...bCoords] },
     });
 }
 
@@ -368,13 +348,7 @@ function safeUnion(a, b) {
 /** União robusta de N → 1. */
 export function unionAll(features = []) {
     const polys = features
-        .map((f) => {
-            try {
-                return turf.cleanCoords(f);
-            } catch {
-                return null;
-            }
-        })
+        .map((f) => { try { return turf.cleanCoords(f); } catch { return null; } })
         .filter(isValidPoly);
     if (polys.length === 0) return null;
     if (polys.length === 1) return polys[0];
@@ -395,10 +369,7 @@ export function differenceMany(base, subtractList = []) {
     for (const s of subs) {
         try {
             const d = turf.difference(acc, s);
-            if (isValidPoly(d)) {
-                acc = turf.cleanCoords(d);
-                continue;
-            }
+            if (isValidPoly(d)) { acc = turf.cleanCoords(d); continue; }
         } catch { }
         try {
             const a0 = turf.buffer(acc, 0, { units: "meters" });
@@ -410,9 +381,9 @@ export function differenceMany(base, subtractList = []) {
     return isValidPoly(acc) ? acc : null;
 }
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Fit bounds Leaflet
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 export function fitToFeatures(map, featureOrCollection, opts = {}) {
     if (!map || !featureOrCollection) return;
     const bbox = safeBBox(featureOrCollection);
@@ -427,46 +398,30 @@ export function fitToFeatures(map, featureOrCollection, opts = {}) {
     } catch { }
 }
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Conversão Leaflet layer → GeoJSON WGS84
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 export function layerToWgs84Feature(layer, roleLabel = "geom") {
     try {
         if (!layer?.getLatLngs) return null;
         const ll = layer.getLatLngs();
         const close = (ring) => {
             if (!ring?.length) return ring;
-            const a = ring[0],
-                b = ring[ring.length - 1];
+            const a = ring[0], b = ring[ring.length - 1];
             if (a.lng !== b.lng || a.lat !== b.lat) return [...ring, a];
             return ring;
         };
         const ringToCoords = (ring) => close(ring).map((p) => [p.lng, p.lat]);
 
         // Polygon => [rings][LatLng]
-        if (
-            Array.isArray(ll) &&
-            ll.length &&
-            Array.isArray(ll[0]) &&
-            !Array.isArray(ll[0][0])
-        ) {
+        if (Array.isArray(ll) && ll.length && Array.isArray(ll[0]) && !Array.isArray(ll[0][0])) {
             const coords = ll.map(ringToCoords);
-            return turf.feature(
-                { type: "Polygon", coordinates: coords },
-                { _role: roleLabel }
-            );
+            return turf.feature({ type: "Polygon", coordinates: coords }, { _role: roleLabel });
         }
         // MultiPolygon => [polys][rings][LatLng]
-        if (
-            Array.isArray(ll) &&
-            Array.isArray(ll[0]) &&
-            Array.isArray(ll[0][0])
-        ) {
+        if (Array.isArray(ll) && Array.isArray(ll[0]) && Array.isArray(ll[0][0])) {
             const coords = ll.map((poly) => poly.map(ringToCoords));
-            return turf.feature(
-                { type: "MultiPolygon", coordinates: coords },
-                { _role: roleLabel }
-            );
+            return turf.feature({ type: "MultiPolygon", coordinates: coords }, { _role: roleLabel });
         }
         return null;
     } catch {
@@ -474,9 +429,9 @@ export function layerToWgs84Feature(layer, roleLabel = "geom") {
     }
 }
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Quantização/Normalização métrica unificada p/ clipping
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 /** Arredonda números para N casas decimais (grade de 10^-N m). */
 function roundN(x, n = 1) {
@@ -510,28 +465,16 @@ function quantizeMercatorFeature(f, decimals = 1) {
 /** Converte Polygon/MultiPolygon WGS→Mercator, cura e quantiza. */
 function normalizePolyToMercatorForPC(input, label = "geom", decimals = 1) {
     let fm = toMercatorPolySafe(input, label);
-    try {
-        fm = turf.buffer(fm, 0, { units: "meters" });
-    } catch { }
+    try { fm = turf.buffer(fm, 0, { units: "meters" }); } catch { }
     fm = quantizeMercatorFeature(fm, decimals);
-    try {
-        fm = turf.buffer(fm, 0, { units: "meters" });
-    } catch { }
+    try { fm = turf.buffer(fm, 0, { units: "meters" }); } catch { }
     return fm;
 }
 
-// ----------------------------------------------------------------------------
-// --- CLIP ROBUSTO: polígono ∩ AOI (ambos WGS84) com métrico+quantização+martinez
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// CLIP ROBUSTO: polígono ∩ AOI (ambos WGS84) usando métrico + PC
+// ---------------------------------------------------------------------------
 
-/**
- * Corta (polígono WGS) pela AOI (WGS) usando normalização métrica unificada:
- *  - WGS→Mercator
- *  - buffer(0) + quantização (0,1 m)
- *  - interseção Martinez
- *  - buffer(-shrink) p/ matar rebarbas
- *  - volta p/ WGS + clean
- */
 export function clipToAoiWgsRobusto(
     polyWgs,
     aoiWgs,
@@ -551,53 +494,33 @@ export function clipToAoiWgsRobusto(
     if (!A.length || !B.length) return null;
 
     let inter;
-    try {
-        inter = pc.intersection(A, B);
-    } catch {
-        inter = null;
-    }
+    try { inter = pc.intersection(A, B); } catch { inter = null; }
     if (!inter || !inter.length) return null;
 
     // volta para métrico Feature, encolhe levemente e limpa
     let clippedM = pcResultToFeature(inter);
-    try {
-        clippedM = turf.buffer(clippedM, 0, { units: "meters" });
-    } catch { }
+    try { clippedM = turf.buffer(clippedM, 0, { units: "meters" }); } catch { }
 
     if (shrinkMeters && Number.isFinite(shrinkMeters) && shrinkMeters > 0) {
-        try {
-            clippedM = turf.buffer(clippedM, -Math.abs(shrinkMeters), {
-                units: "meters",
-            });
-        } catch { }
-        try {
-            clippedM = turf.buffer(clippedM, 0, { units: "meters" });
-        } catch { }
+        try { clippedM = turf.buffer(clippedM, -Math.abs(shrinkMeters), { units: "meters" }); } catch { }
+        try { clippedM = turf.buffer(clippedM, 0, { units: "meters" }); } catch { }
     }
 
     // quantiza novamente após o shrink
     clippedM = quantizeMercatorFeature(clippedM, gridDecimals);
-    try {
-        clippedM = turf.buffer(clippedM, 0, { units: "meters" });
-    } catch { }
+    try { clippedM = turf.buffer(clippedM, 0, { units: "meters" }); } catch { }
 
     // volta p/ WGS84 + limpeza final
     let clippedW = turf.toWgs84(clippedM);
-    try {
-        clippedW = turf.cleanCoords(clippedW);
-    } catch { }
-
+    try { clippedW = turf.cleanCoords(clippedW); } catch { }
     return clippedW;
 }
 
-// ----------------------------------------------------------------------------
-// Versão antiga útil em alguns casos (mantida)
-// ----------------------------------------------------------------------------
 export function clipToAoiWgs(polyWgs, aoiWgs, epsilonMeters = 0.02) {
     const maskF = asPolyFeatureWgs(polyWgs);
     const aoiF = asPolyFeatureWgs(aoiWgs);
     if (!maskF) return null;
-    if (!aoiF) return maskF; // sem AOI válida, retorna original
+    if (!aoiF) return maskF;
 
     // Projeção métrica (sem simplificar)
     const maskM = toMercatorPolyLoose(maskF);
@@ -605,21 +528,14 @@ export function clipToAoiWgs(polyWgs, aoiWgs, epsilonMeters = 0.02) {
     if (!maskM || !aoiM) return null;
 
     // “cura” topologia
-    let m0 = maskM,
-        a0 = aoiM;
-    try {
-        m0 = turf.buffer(maskM, 0, { units: "meters" });
-    } catch { }
-    try {
-        a0 = turf.buffer(aoiM, 0, { units: "meters" });
-    } catch { }
+    let m0 = maskM, a0 = aoiM;
+    try { m0 = turf.buffer(maskM, 0, { units: "meters" }); } catch { }
+    try { a0 = turf.buffer(aoiM, 0, { units: "meters" }); } catch { }
 
     // encolhe levemente a máscara para não sobrar “rebarba” na borda da AOI
     if (epsilonMeters && epsilonMeters > 0) {
         const eps = Math.max(0.01, Math.min(epsilonMeters, 0.2));
-        try {
-            m0 = turf.buffer(m0, -eps, { units: "meters" });
-        } catch { }
+        try { m0 = turf.buffer(m0, -eps, { units: "meters" }); } catch { }
     }
 
     const A = toPcMultiPolygon(m0);
@@ -627,39 +543,24 @@ export function clipToAoiWgs(polyWgs, aoiWgs, epsilonMeters = 0.02) {
     if (!A.length || !B.length) return null;
 
     let inter = null;
-    try {
-        inter = pc.intersection(A, B);
-    } catch {
-        inter = null;
-    }
+    try { inter = pc.intersection(A, B); } catch { inter = null; }
     if (!inter || !inter.length) return null;
 
     // volta p/ WGS84 + limpeza forte
     let clippedM = pcResultToFeature(inter); // métrico
-    let clippedW = turf.toWgs84(clippedM); // WGS84
-    try {
-        clippedW = turf.buffer(clippedW, 0, { units: "meters" });
-    } catch { }
-    try {
-        clippedW = turf.cleanCoords(clippedW);
-    } catch { }
+    let clippedW = turf.toWgs84(clippedM);   // WGS84
+    try { clippedW = turf.buffer(clippedW, 0, { units: "meters" }); } catch { }
+    try { clippedW = turf.cleanCoords(clippedW); } catch { }
 
     // garantia final: intersect Turf com AOI WGS
     try {
         const final = turf.intersect(clippedW, aoiF);
         if (final) return turf.cleanCoords(final);
     } catch { }
-
     return clippedW;
 }
 
-/**
- * Clipping teimoso:
- *  - normaliza (Mercator + quantização)
- *  - pc.intersection
- *  - se vazio, expande AOI (0.05m, 0.2m, 1m) e tenta de novo
- *  - por fim, faz intersect final com AOI original (sem expandir)
- */
+/** Versão teimosa com tentativas de “inchar” AOI */
 export function clipToAoiWgsTeimoso(polyWgs, aoiWgs, { gridDecimals = 1 } = {}) {
     const maskF = asPolyFeatureWgs(polyWgs);
     const aoiF = asPolyFeatureWgs(aoiWgs);
@@ -713,11 +614,7 @@ export function clipToAoiWgsTeimoso(polyWgs, aoiWgs, { gridDecimals = 1 } = {}) 
     return clippedW;
 }
 
-/**
- * Fallback final: interseção Martinez diretamente em WGS84 (planar),
- * apenas forçando orientação/fechamento. Útil quando projeção/buffer
- * “matam” a geometria por tangência/ruído.
- */
+/** Fallback planar direto em WGS (sem projetar). */
 export function clipToAoiWgs_PlanarNoProj(polyWgs, aoiWgs) {
     const maskF = asPolyFeatureWgs(polyWgs);
     const aoiF = asPolyFeatureWgs(aoiWgs);
@@ -727,7 +624,7 @@ export function clipToAoiWgs_PlanarNoProj(polyWgs, aoiWgs) {
     const mFix = orientAndCloseWgs(maskF);
     const aFix = orientAndCloseWgs(aoiF);
 
-    const A = toPcMultiPolygon(mFix); // aqui estamos usando lon/lat “como se” fossem XY
+    const A = toPcMultiPolygon(mFix); // usando lon/lat como XY
     const B = toPcMultiPolygon(aFix);
     if (!A.length || !B.length) return null;
 
@@ -742,9 +639,6 @@ export function clipToAoiWgs_PlanarNoProj(polyWgs, aoiWgs) {
     }
 }
 
-
-
-
 /** Interseção específica p/ máscara de rua ∩ AOI (alias do robusto). */
 export function clipStreetMaskToAOI_WGS(streetMaskWgs, aoiWgs, epsilon = 0.2) {
     return clipToAoiWgsRobusto(streetMaskWgs, aoiWgs, {
@@ -753,11 +647,9 @@ export function clipStreetMaskToAOI_WGS(streetMaskWgs, aoiWgs, epsilon = 0.2) {
     });
 }
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // AV − União(cortes) (robusto, em métrico)
-// ----------------------------------------------------------------------------
-
-/** União de uma lista de cortes (WGS84) → Feature em Mercator. */
+// ---------------------------------------------------------------------------
 export function unionCortesMercator(cortesList) {
     if (!cortesList?.length) return null;
     try {
@@ -774,8 +666,7 @@ export function unionCortesMercator(cortesList) {
         try {
             const polys = cortesList.map((c) => toMercatorPolySafe(c, "corte"));
             let u = polys[0];
-            for (let i = 1; i < polys.length; i++)
-                u = turf.union(u, polys[i]) || u;
+            for (let i = 1; i < polys.length; i++) u = turf.union(u, polys[i]) || u;
             return u;
         } catch {
             return null;
@@ -786,16 +677,10 @@ export function unionCortesMercator(cortesList) {
 /** Diferença tolerante AV_M − cortes_M (ambos em Métrico). */
 export function differenceSafe(avM, cortesUnionM) {
     if (!cortesUnionM) return avM;
-    const EPS = [
-        0, 0.02, -0.02, 0.05, -0.05, 0.1, -0.1, 0.2, -0.2, 0.5, -0.5, 1, -1, 2,
-        -2,
-    ];
+    const EPS = [0, 0.02, -0.02, 0.05, -0.05, 0.1, -0.1, 0.2, -0.2, 0.5, -0.5, 1, -1, 2, -2];
     for (const e of EPS) {
         try {
-            const cAdj =
-                e === 0
-                    ? cortesUnionM
-                    : turf.buffer(cortesUnionM, e, { units: "meters" });
+            const cAdj = e === 0 ? cortesUnionM : turf.buffer(cortesUnionM, e, { units: "meters" });
             const d = turf.difference(avM, cAdj);
             if (d) return d;
         } catch { }
@@ -817,20 +702,14 @@ export function differenceSafe(avM, cortesUnionM) {
 export function cutAreaVerde(avWgs84, cortesWgs84 = [], epsilonMeters = 0.05) {
     if (!avWgs84) throw new Error("AV ausente");
     let av = ensureFeaturePolygon(avWgs84, "av");
-    const cortes = (cortesWgs84 || []).map((c) =>
-        ensureFeaturePolygon(c, "corte")
-    );
+    const cortes = (cortesWgs84 || []).map((c) => ensureFeaturePolygon(c, "corte"));
 
     // Projeta p/ métrico
     let avM = toMercatorPolySafe(av, "av");
-    const cortesM = cortes
-        .map((c) => toMercatorPolySafe(c, "corte"))
-        .filter(Boolean);
+    const cortesM = cortes.map((c) => toMercatorPolySafe(c, "corte")).filter(Boolean);
 
     // “Curas” iniciais
-    try {
-        avM = turf.buffer(avM, 0, { units: "meters" });
-    } catch { }
+    try { avM = turf.buffer(avM, 0, { units: "meters" }); } catch { }
 
     // União dos cortes
     let cortesU = null;
@@ -842,11 +721,9 @@ export function cutAreaVerde(avWgs84, cortesWgs84 = [], epsilonMeters = 0.05) {
             }
             cortesU = pcResultToFeature(acc);
         } catch {
-            // fallback: turf.union sequencial
             try {
                 let u = cortesM[0];
-                for (let i = 1; i < cortesM.length; i++)
-                    u = turf.union(u, cortesM[i]) || u;
+                for (let i = 1; i < cortesM.length; i++) u = turf.union(u, cortesM[i]) || u;
                 cortesU = u;
             } catch {
                 cortesU = null;
@@ -854,9 +731,7 @@ export function cutAreaVerde(avWgs84, cortesWgs84 = [], epsilonMeters = 0.05) {
         }
         if (epsilonMeters && cortesU) {
             const eps = Math.max(0.01, Math.min(epsilonMeters, 0.5));
-            try {
-                cortesU = turf.buffer(cortesU, eps, { units: "meters" });
-            } catch { }
+            try { cortesU = turf.buffer(cortesU, eps, { units: "meters" }); } catch { }
         }
     }
 
@@ -875,14 +750,10 @@ export function cutAreaVerde(avWgs84, cortesWgs84 = [], epsilonMeters = 0.05) {
 
     // Volta p/ WGS84 e limpa
     let recortado = turf.toWgs84(diffM);
-    try {
-        recortado = turf.cleanCoords(recortado);
-    } catch { }
+    try { recortado = turf.cleanCoords(recortado); } catch { }
 
     let uniaoCortes = cortesU ? turf.toWgs84(cortesU) : null;
-    try {
-        if (uniaoCortes) uniaoCortes = turf.cleanCoords(uniaoCortes);
-    } catch { }
+    try { if (uniaoCortes) uniaoCortes = turf.cleanCoords(uniaoCortes); } catch { }
 
     const areaRestanteM2 = turf.area(recortado);
     const areaCortesM2 = uniaoCortes ? turf.area(uniaoCortes) : 0;
@@ -890,35 +761,204 @@ export function cutAreaVerde(avWgs84, cortesWgs84 = [], epsilonMeters = 0.05) {
     return { recortado, areaRestanteM2, areaCortesM2, uniaoCortes };
 }
 
-// ----------------------------------------------------------------------------
-// Utilidades adicionais úteis no fluxo
-// ----------------------------------------------------------------------------
-
-/** Área em m² de um Feature Polygon/MultiPolygon. */
+// ---------------------------------------------------------------------------
+// Utilidades adicionais
+// ---------------------------------------------------------------------------
 export function getArea(feature) {
     if (!feature) return 0;
     return turf.area(feature);
 }
 
-/** Interseção (pode retornar null). */
 export function getIntersection(polyA, polyB) {
     if (!polyA || !polyB) return null;
     return turf.intersect(polyA, polyB);
 }
 
-/** Diferença A - B (pode retornar null). */
 export function getDifference(polyA, polyB) {
     if (!polyA || !polyB) return null;
     return turf.difference(polyA, polyB);
 }
 
-/** Buffer em metros (polígonos). */
 export function bufferPolygon(feature, distanceMeters) {
     if (!feature) return null;
     return turf.buffer(feature, distanceMeters, { units: "meters" });
 }
 
-/** FeatureCollection a partir de lista de features. */
 export function makeFeatureCollection(features = []) {
     return turf.featureCollection(features.filter(Boolean));
+}
+
+// ---------------------------------------------------------------------------
+// MÁSCARAS DE LAYERS — Margens paralelas para camadas de LINHAS
+// ---------------------------------------------------------------------------
+
+/**
+ * Itera apenas por LineString / MultiLineString de um Feature/FC.
+ * Retorna uma lista de Feature<LineString>.
+ */
+export function collectLineStrings(fcOrFeat) {
+    const fc = toFeatureCollection(fcOrFeat);
+    const out = [];
+    for (const f of fc.features) {
+        if (!f || !f.geometry) continue;
+        const g = f.geometry;
+        if (g.type === "LineString") {
+            out.push(f);
+        } else if (g.type === "MultiLineString") {
+            for (const coords of g.coordinates || []) {
+                out.push(turf.lineString(coords, { ...(f.properties || {}) }));
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * Cria margens paralelas (linhas offset) em ambos os lados de cada linha.
+ * - distMeters: distância em metros
+ * - options: { sourceId?: string, props?: object }
+ *
+ * Retorna FeatureCollection<LineString> com properties:
+ *   { side: 'left'|'right', margin_m: number, source_id?: string, ...props }
+ */
+export function makeParallelMargins(input, distMeters, options = {}) {
+    const km = (distMeters || 0) / 1000;
+    const sourceId = options.sourceId;
+    const extra = options.props || {};
+    if (!distMeters || distMeters <= 0) {
+        return turf.featureCollection([]);
+    }
+
+    const lines = collectLineStrings(input);
+    const out = [];
+
+    for (const lf of lines) {
+        // Proteção: linhas muito curtas podem falhar no offset
+        if (!lf.geometry || lf.geometry.coordinates.length < 2) continue;
+
+        // Left (+d) e Right (-d)
+        let left, right;
+        try {
+            left = turf.lineOffset(lf, +km, { units: "kilometers" });
+        } catch { }
+        try {
+            right = turf.lineOffset(lf, -km, { units: "kilometers" });
+        } catch { }
+
+        if (left && left.geometry && left.geometry.coordinates?.length >= 2) {
+            left.properties = {
+                ...(lf.properties || {}),
+                ...extra,
+                side: "left",
+                margin_m: distMeters,
+                ...(sourceId ? { source_id: sourceId } : {}),
+            };
+            out.push(left);
+        }
+        if (right && right.geometry && right.geometry.coordinates?.length >= 2) {
+            right.properties = {
+                ...(lf.properties || {}),
+                ...extra,
+                side: "right",
+                margin_m: distMeters,
+                ...(sourceId ? { source_id: sourceId } : {}),
+            };
+            out.push(right);
+        }
+    }
+
+    return turf.featureCollection(out);
+}
+
+/**
+ * Extende uma LineString em ambos os extremos por N metros (faz em Métrico).
+ */
+export function extendLineStringMeters(lineFeat, extendMeters = 10) {
+    if (!lineFeat?.geometry || lineFeat.geometry.type !== "LineString") return lineFeat;
+    const coords = lineFeat.geometry.coordinates || [];
+    if (coords.length < 2) return lineFeat;
+    // Para cálculo métrico, projeta para Mercator
+    const lm = turf.toMercator(lineFeat);
+    const cm = lm.geometry.coordinates;
+    if (cm.length < 2) return lineFeat;
+    const len = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const unit = (a, b) => {
+        const L = len(a, b);
+        return [(b[0] - a[0]) / L, (b[1] - a[1]) / L];
+    };
+    const vStart = unit(cm[0], cm[1]);
+    const vEnd = unit(cm[cm.length - 2], cm[cm.length - 1]);
+    const start = [cm[0][0] - vStart[0] * extendMeters, cm[0][1] - vStart[1] * extendMeters];
+    const end = [
+        cm[cm.length - 1][0] + vEnd[0] * extendMeters,
+        cm[cm.length - 1][1] + vEnd[1] * extendMeters,
+    ];
+    const extended = turf.lineString([start, ...cm, end], { ...(lineFeat.properties || {}) });
+    let out = turf.toWgs84(extended);
+    try { out = turf.cleanCoords(out); } catch { }
+    return out;
+}
+
+/**
+ * Extende todas as linhas de um Feature/FeatureCollection.
+ */
+export function extendLinesMeters(fcOrFeat, extendMeters = 10) {
+    const fc = toFeatureCollection(fcOrFeat);
+    const out = [];
+    for (const f of fc.features) {
+        if (!f?.geometry) continue;
+        if (f.geometry.type === "LineString") {
+            out.push(extendLineStringMeters(f, extendMeters));
+        } else if (f.geometry.type === "MultiLineString") {
+            for (const part of f.geometry.coordinates || []) {
+                out.push(extendLineStringMeters(turf.lineString(part, { ...(f.properties || {}) }), extendMeters));
+            }
+        }
+    }
+    return turf.featureCollection(out);
+}
+
+
+/**
+ * Recorta LineString(s) por um polígono (mantém apenas trechos internos/na borda).
+ * Aceita Feature/FeatureCollection (LineString/MultiLineString) e Polygon/MultiPolygon.
+ */
+export function clipLinesToPolygon(linesFc, polygon, { keepBoundary = true } = {}) {
+    const fc = toFeatureCollection(linesFc);
+    const poly = ensureFeaturePolygon(polygon, "clipPoly");
+    const boundary = turf.polygonToLine(poly);
+    const kept = [];
+
+    for (const lf of fc.features) {
+        const g = lf?.geometry?.type;
+        if (g !== "LineString" && g !== "MultiLineString") continue;
+
+        // Se vier MultiLineString, o lineSplit já lida parte/parte; se falhar, cai no fallback.
+        let pieces;
+        try {
+            pieces = turf.lineSplit(lf, boundary);
+        } catch { pieces = null; }
+        const parts = pieces?.features?.length ? pieces.features : [lf];
+
+        for (const seg of parts) {
+            // Pega um ponto "meio" do segmento para testar se está dentro da AOI
+            let mid = null;
+            try {
+                const lenKm = Math.max(0, turf.length(seg, { units: "kilometers" }));
+                mid = lenKm > 0 ? turf.along(seg, lenKm / 2, { units: "kilometers" }) : null;
+            } catch { }
+
+            let inside = false;
+            try {
+                // keepBoundary=true => tocar a borda conta como "dentro"
+                inside = mid ? turf.booleanPointInPolygon(mid, poly, { ignoreBoundary: !keepBoundary }) : false;
+            } catch { }
+
+            if (inside) {
+                seg.properties = { ...(lf.properties || {}), ...(seg.properties || {}) };
+                kept.push(seg);
+            }
+        }
+    }
+    return turf.featureCollection(kept);
 }

@@ -1,3 +1,4 @@
+// src/pages/geoman/GeomanLoteador.jsx
 import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import {
     MapContainer,
@@ -7,6 +8,7 @@ import {
     useMap,
     Pane,
 } from "react-leaflet";
+import L from "leaflet";
 
 import "leaflet/dist/leaflet.css";
 import "@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css";
@@ -24,6 +26,10 @@ import {
     featureWithOriginal,
     unionAll,
     differenceMany,
+    toFeatureCollection,
+    makeParallelMargins,
+    clipLinesToPolygon,
+    extendLinesMeters,
 } from "./geoUtils";
 
 const token = import.meta.env.VITE_MAPBOX_TOKEN?.trim();
@@ -94,6 +100,21 @@ function TilesWithFallback() {
     );
 }
 
+/** Remove o layer desenhado pelo Geoman de forma segura (evita _removePath / lat undefined). */
+function safeRemoveDraftLayer(map, layer) {
+    if (!layer) return;
+    try { layer.off(); } catch { }
+    try {
+        if (map && map.hasLayer(layer)) {
+            setTimeout(() => {
+                try {
+                    if (map.hasLayer(layer)) map.removeLayer(layer);
+                } catch { }
+            }, 0);
+        }
+    } catch { }
+}
+
 function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
     const map = useMap();
     const controlsReadyRef = useRef(false);
@@ -109,7 +130,7 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                 drawPolyline: true,
                 drawRectangle: false,
                 drawPolygon: true,
-                cutPolygon: false,
+                cutPolygon: true,
                 editMode: true,
                 dragMode: true,
                 rotateMode: false,
@@ -127,6 +148,7 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
         }
 
         const handleCreate = (e) => {
+            try { e.layer.options.pmIgnore = true; } catch { }
             const gj = e.layer.toGeoJSON();
             try {
                 onCreateFeature(drawMode, gj, map, e.layer);
@@ -138,9 +160,8 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                         map.pm.disableDraw();
                     } catch { }
                 }
-                try {
-                    e.layer.remove();
-                } catch { }
+                // Remoção segura do sketch
+                safeRemoveDraftLayer(map, e.layer);
             }
         };
 
@@ -155,17 +176,9 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
             map.pm.disableDraw();
         } catch { }
         if (drawMode === "areaVerde") {
-            map.pm.enableDraw("Polygon", {
-                snappable: true,
-                snapDistance: 20,
-                continueDrawing: true,
-            });
+            map.pm.enableDraw("Polygon", { snappable: true, snapDistance: 20, continueDrawing: true });
         } else if (drawMode === "corteLayer") {
-            map.pm.enableDraw("Polygon", {
-                snappable: true,
-                snapDistance: 20,
-                continueDrawing: true,
-            });
+            map.pm.enableDraw("Polygon", { snappable: true, snapDistance: 20, continueDrawing: true });
         } else if (drawMode === "rua") {
             map.pm.enableDraw("Line", { snappable: true, snapDistance: 20 });
         }
@@ -252,7 +265,9 @@ export default function GeomanLoteador() {
         if (recalcRAF.current) return;
         recalcRAF.current = requestAnimationFrame(() => {
             recalcRAF.current = null;
-            try { recalcRef.current?.(); } catch { }
+            try {
+                recalcRef.current?.();
+            } catch { }
         });
     }, [recalcRef]);
     useEffect(() => () => {
@@ -263,16 +278,11 @@ export default function GeomanLoteador() {
     const [projetoSel, setProjetoSel] = useState("");
     const [aoi, setAoi] = useState(null);
     const [lotes, setLotes] = useState([]);
+
+    // Overlays do backend agrupados por overlay_id
     const [extrasByOverlay, setExtrasByOverlay] = useState({});
-    const [visible, setVisible] = useState({
-        aoi: true,
-        areasVerdes: true,
-        loteavel: true,
-        cortes: true,
-        ruas: true,
-        lotes: true,
-        overlays: {},
-    });
+    // Visibilidade por overlay (camada base) — padrão TRUE
+    const [overlayVisible, setOverlayVisible] = useState({}); // { [overlayId]: bool }
 
     // RUAS via hook separado
     const {
@@ -284,11 +294,28 @@ export default function GeomanLoteador() {
         updateRuaGeometry,
         updateRuaWidth,
         removeRua,
-    } = useRuas({ aoiForClip: aoi }); // se quiser forçar AOI do backend, passe aqui
+    } = useRuas({ aoiForClip: aoi });
 
     const [drawMode, setDrawMode] = useState("none");
     const [drawNonce, setDrawNonce] = useState(0);
     const [showAreaVerde, setShowAreaVerde] = useState(false);
+
+    // ======= Margens (somente linhas) =======
+    // UI por overlay linear: { dist: number, show: boolean }
+    const [marginUiByOverlay, setMarginUiByOverlay] = useState({});
+    // Geo de margens geradas por overlay
+    const [marginGeoByOverlay, setMarginGeoByOverlay] = useState({});
+    // Versão para forçar remount do GeoJSON da margem
+    const [marginVersionByOverlay, setMarginVersionByOverlay] = useState({});
+
+    // --- Helpers de validação de linhas (evita latLng undefined) ---
+    const has2pts = (coords) => Array.isArray(coords) && coords.length >= 2;
+    const isValidLineGeom = (g) =>
+        g &&
+        ((g.type === "LineString" && has2pts(g.coordinates)) ||
+            (g.type === "MultiLineString" && (g.coordinates || []).some(has2pts)));
+    const filterValidLineFeats = (fcOrFeat) =>
+        toFeatureCollection(fcOrFeat).features.filter((f) => isValidLineGeom(f.geometry || {}));
 
     useEffect(() => {
         (async () => {
@@ -354,10 +381,6 @@ export default function GeomanLoteador() {
         );
         if (ruasFeats.length) {
             const list = ruasFeats.map((f) => featureWithOriginal(f, "geojson"));
-            // substitui/concatena conforme sua regra atual
-            // aqui, optamos por concatenar:
-            // (se quiser substituir, use setRuas(list))
-            // precisamos do setRuas do hook:
             list.forEach((gj) => addRuaFromGJ(gj, gj?.properties?.width_m));
         }
 
@@ -383,8 +406,12 @@ export default function GeomanLoteador() {
         corteLayerByUid.current = new Map();
         setAreaLoteavel(null);
         setLotes([]);
+
         setExtrasByOverlay({});
-        setVisible((prev) => ({ ...prev, overlays: {} }));
+        setOverlayVisible({});
+        setMarginUiByOverlay({});
+        setMarginGeoByOverlay({});
+        setMarginVersionByOverlay({});
 
         try {
             const { data: summary } = await axiosAuth.get(`projetos/${id}/map/summary/`);
@@ -396,13 +423,14 @@ export default function GeomanLoteador() {
                 acc.push(aoiFeat);
             }
 
-            const overlaysList = (summary?.overlays || []).filter(
-                (o) => (o?.count || 0) > 0
-            );
-            setVisible((prev) => ({
-                ...prev,
-                overlays: overlaysList.reduce((accv, o) => ((accv[o.overlay_id] = true), accv), {}),
-            }));
+            const overlaysList = (summary?.overlays || []).filter((o) => (o?.count || 0) > 0);
+
+            // Por padrão, deixa TODOS os overlays visíveis
+            setOverlayVisible((prev) => {
+                const next = { ...prev };
+                overlaysList.forEach((o) => (next[o.overlay_id] = true));
+                return next;
+            });
 
             for (const o of overlaysList) {
                 const { data: fc } = await axiosAuth.get(`projetos/${id}/features/`, {
@@ -417,10 +445,7 @@ export default function GeomanLoteador() {
             }
 
             if (mapRef.current && acc.length)
-                fitToFeatures(mapRef.current, {
-                    type: "FeatureCollection",
-                    features: acc,
-                });
+                fitToFeatures(mapRef.current, { type: "FeatureCollection", features: acc });
             setTimeout(() => recalcRef.current?.(), 0);
         } catch (e) {
             console.error("[abrirProjeto] erro:", e);
@@ -437,12 +462,171 @@ export default function GeomanLoteador() {
         const final = base ? differenceMany(base, masks) : null;
 
         setAreaLoteavel(
-            final
-                ? { ...final, properties: { ...(final.properties || {}), _uid: "loteavel-ruas" } }
-                : null
+            final ? { ...final, properties: { ...(final.properties || {}), _uid: "loteavel-ruas" } } : null
         );
     }
 
+    // ===== Helpers Margens / tipos =====
+    const isLineFeature = (f) =>
+        f?.geometry?.type === "LineString" || f?.geometry?.type === "MultiLineString";
+    const overlayHasLines = (overlay) => (overlay?.features || []).some((f) => isLineFeature(f));
+
+    // Todos overlays ordenados
+    const overlayList = useMemo(
+        () => Object.keys(extrasByOverlay).sort((a, b) => a.localeCompare(b)),
+        [extrasByOverlay]
+    );
+
+    // Inicializa dist padrão (30m) ao detectar overlay linear
+    useEffect(() => {
+        if (!overlayList.length) return;
+        setMarginUiByOverlay((prev) => {
+            const next = { ...prev };
+            overlayList.forEach((oid) => {
+                const ov = extrasByOverlay[oid];
+                if (overlayHasLines(ov) && !next[oid]) next[oid] = { dist: 30, show: true };
+            });
+            return next;
+        });
+    }, [overlayList, extrasByOverlay]);
+
+    // ==== Geração de margens ====
+    const generateMarginsForOverlay = useCallback(
+        (overlayId, { fit = false } = {}) => {
+            const map = mapRef.current;
+            const base = extrasByOverlay[overlayId];
+            if (!map || !base?.features?.length || !overlayHasLines(base)) return;
+
+            const dist = Number(marginUiByOverlay[overlayId]?.dist || 0);
+            if (!(dist > 0)) {
+                // remove margem existente
+                setMarginGeoByOverlay((prev) => {
+                    if (!prev[overlayId]) return prev;
+                    const { [overlayId]: _, ...rest } = prev;
+                    return rest;
+                });
+                setMarginVersionByOverlay((prev) => ({ ...prev, [overlayId]: (prev[overlayId] || 0) + 1 }));
+                return;
+            }
+
+            const fcLines = toFeatureCollection({
+                type: "FeatureCollection",
+                features: base.features.filter((f) => isLineFeature(f)),
+            });
+
+            let margins = makeParallelMargins(fcLines, dist, {
+                sourceId: overlayId,
+                props: { layer_name: overlayId },
+            });
+
+            // Estende antes de clipar para “encostar” na AOI
+            const EXTEND_BEFORE_CLIP_M = Math.min(120, Math.max(20, dist * 1.2));
+            margins = extendLinesMeters(margins, EXTEND_BEFORE_CLIP_M);
+
+            // Não passar da AOI (e encostar na borda)
+            if (aoi) {
+                margins = clipLinesToPolygon(margins, aoi, { keepBoundary: true });
+            }
+
+            // Sanitize: manter apenas segmentos válidos 2+ pontos
+            if (margins?.features?.length) {
+                const feats = filterValidLineFeats(margins);
+                margins = { type: "FeatureCollection", features: feats };
+                if (!margins.features.length) {
+                    setMarginGeoByOverlay((prev) => {
+                        if (!prev[overlayId]) return prev;
+                        const { [overlayId]: _, ...rest } = prev;
+                        return rest;
+                    });
+                    setMarginVersionByOverlay((prev) => ({ ...prev, [overlayId]: (prev[overlayId] || 0) + 1 }));
+                    return;
+                }
+            } else {
+                return;
+            }
+
+            setMarginGeoByOverlay((prev) => ({ ...prev, [overlayId]: margins }));
+            setMarginVersionByOverlay((prev) => ({ ...prev, [overlayId]: (prev[overlayId] || 0) + 1 }));
+
+            if (fit) {
+                try {
+                    const tmp = L.geoJSON(margins);
+                    const b = tmp.getBounds();
+                    if (b && b.isValid()) map.fitBounds(b, { padding: [20, 20] });
+                } catch { }
+            }
+        },
+        [extrasByOverlay, marginUiByOverlay, aoi]
+    );
+
+    const handleGenerateMarginsOne = useCallback(
+        (overlayId) => generateMarginsForOverlay(overlayId, { fit: true }),
+        [generateMarginsForOverlay]
+    );
+
+    const handleGenerateMarginsAll = useCallback(() => {
+        const map = mapRef.current;
+        if (!map) return;
+        const next = {};
+        const nextVer = {};
+        const bounds = [];
+
+        overlayList.forEach((overlayId) => {
+            if (!overlayVisible[overlayId]) return; // só para visíveis (mude se quiser)
+            const base = extrasByOverlay[overlayId];
+            if (!base?.features?.length || !overlayHasLines(base)) return;
+
+            const dist = Number(marginUiByOverlay[overlayId]?.dist || 0);
+            if (!(dist > 0)) return;
+
+            const fcLines = toFeatureCollection({
+                type: "FeatureCollection",
+                features: base.features.filter((f) => isLineFeature(f)),
+            });
+
+            let margins = makeParallelMargins(fcLines, dist, {
+                sourceId: overlayId,
+                props: { layer_name: overlayId },
+            });
+            margins = extendLinesMeters(margins, Math.min(120, Math.max(20, dist * 1.2)));
+            if (aoi) margins = clipLinesToPolygon(margins, aoi, { keepBoundary: true });
+
+            // sanitize
+            const feats = filterValidLineFeats(margins);
+            if (!feats.length) return;
+            next[overlayId] = { type: "FeatureCollection", features: feats };
+            nextVer[overlayId] = (marginVersionByOverlay[overlayId] || 0) + 1;
+
+            try {
+                const tmp = L.geoJSON(next[overlayId]);
+                const b = tmp.getBounds();
+                if (b && b.isValid()) bounds.push(b);
+            } catch { }
+        });
+
+        if (Object.keys(next).length) {
+            setMarginGeoByOverlay((prev) => ({ ...prev, ...next }));
+            setMarginVersionByOverlay((prev) => ({ ...prev, ...nextVer }));
+        }
+
+        // Fit geral
+        try {
+            if (bounds.length) {
+                let total = bounds[0];
+                for (let i = 1; i < bounds.length; i++) total = total.extend(bounds[i]);
+                map.fitBounds(total, { padding: [30, 30] });
+            }
+        } catch { }
+    }, [
+        overlayList,
+        overlayVisible,
+        extrasByOverlay,
+        marginUiByOverlay,
+        aoi,
+        marginVersionByOverlay,
+    ]);
+
+    // ===== Estilos =====
     const excedeu = cortePct > (parseFloat(percentPermitido) || 0) + 1e-6;
     const avStyle = {
         color: excedeu ? "#ff4d4f" : "#007a4d",
@@ -467,9 +651,24 @@ export default function GeomanLoteador() {
         opacity: 1,
     };
     const lotStyle = { color: "#8e44ad", fillOpacity: 0.2, weight: 1, opacity: 1 };
+    const marginStyle = { color: "#ff8800", weight: 2, dashArray: "4 4", opacity: 1 };
+
+    // estilo base para overlays do backend
+    const styleForOverlayFeature = (overlayId) => (feat) => {
+        const baseColor = extrasByOverlay[overlayId]?.color || "#2f6db3";
+        const g = feat.geometry?.type;
+        if (g === "LineString" || g === "MultiLineString") {
+            return { color: baseColor, weight: 2, opacity: 1 };
+        }
+        if (g === "Polygon" || g === "MultiPolygon") {
+            return { color: baseColor, weight: 1.5, fillColor: baseColor, fillOpacity: 0.08, opacity: 1 };
+        }
+        return { color: baseColor, weight: 2, opacity: 1 };
+    };
 
     return (
         <div className="w-full h-full relative">
+            {/* Painel principal (projetos / AV / Ruas / Loteável) */}
             <div className="absolute z-[1000] bottom-10 left-2 bg-white/40 rounded-xl shadow p-3 space-y-3 max-w-[1080px]">
                 <div className="flex items-center gap-2">
                     <select
@@ -527,6 +726,95 @@ export default function GeomanLoteador() {
                 </button>
             </div>
 
+            {/* Painel de Camadas do Backend (visíveis por padrão) + Margens (somente linhas) */}
+            <div className="absolute z-[1000] top-2 left-2 bg-white/90 rounded-xl shadow p-3 space-y-2 min-w-[460px] max-w-[700px]">
+                <div className="flex items-center justify-between">
+                    <h3 className="font-semibold">Camadas do backend</h3>
+                    <button
+                        className="px-3 py-1 rounded bg-amber-600 text-white"
+                        onClick={handleGenerateMarginsAll}
+                        title="Gerar margens para todas as camadas lineares visíveis"
+                    >
+                        Gerar margens (todas)
+                    </button>
+                </div>
+
+                {!overlayList.length && (
+                    <div className="text-sm text-gray-600">Nenhuma camada carregada do backend neste projeto.</div>
+                )}
+
+                {overlayList.map((overlayId) => {
+                    const visible = !!overlayVisible[overlayId];
+                    const isLinear = overlayHasLines(extrasByOverlay[overlayId]);
+                    const dist = marginUiByOverlay[overlayId]?.dist ?? 30;
+                    const showMargin = marginUiByOverlay[overlayId]?.show ?? true;
+
+                    return (
+                        <div key={overlayId} className="flex items-center gap-2">
+                            <label className="flex items-center gap-2 min-w-[220px]">
+                                <input
+                                    type="checkbox"
+                                    checked={visible}
+                                    onChange={() =>
+                                        setOverlayVisible((prev) => ({ ...prev, [overlayId]: !prev[overlayId] }))
+                                    }
+                                />
+                                <span className="truncate" title={overlayId}>
+                                    {overlayId}
+                                </span>
+                            </label>
+
+                            {/* Apenas para camadas LINEARES: distância + gerar margem + toggle margem */}
+                            {isLinear ? (
+                                <>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        step={1}
+                                        className="border p-1 rounded w-24"
+                                        value={dist}
+                                        onChange={(e) => {
+                                            const v = Number(e.target.value) || 0;
+                                            setMarginUiByOverlay((prev) => ({
+                                                ...prev,
+                                                [overlayId]: { ...(prev[overlayId] || { show: true }), dist: v },
+                                            }));
+                                        }}
+                                        placeholder="dist (m)"
+                                        title="Distância da margem (metros)"
+                                    />
+                                    <button
+                                        className="px-2 py-1 rounded bg-amber-700 text-white"
+                                        onClick={() => handleGenerateMarginsOne(overlayId)}
+                                        title="Gerar margens paralelas (ambos os lados) para esta camada"
+                                    >
+                                        Gerar margem
+                                    </button>
+                                    <label className="flex items-center gap-1 text-xs">
+                                        <input
+                                            type="checkbox"
+                                            checked={showMargin}
+                                            onChange={() =>
+                                                setMarginUiByOverlay((prev) => ({
+                                                    ...prev,
+                                                    [overlayId]: {
+                                                        ...(prev[overlayId] || { dist: 30 }),
+                                                        show: !(prev[overlayId]?.show ?? true),
+                                                    },
+                                                }))
+                                            }
+                                        />
+                                        margem
+                                    </label>
+                                </>
+                            ) : (
+                                <span className="text-xs text-gray-500">(poligonal)</span>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+
             <AreaVerde
                 open={showAreaVerde}
                 onClose={() => setShowAreaVerde(false)}
@@ -567,6 +855,8 @@ export default function GeomanLoteador() {
                     <Pane name="pane-cortes" style={{ zIndex: 590 }} />
                     <Pane name="pane-ruas" style={{ zIndex: 540 }} />
                     <Pane name="pane-lotes" style={{ zIndex: 535 }} />
+                    <Pane name="pane-overlays" style={{ zIndex: 550 }} />
+                    <Pane name="pane-margens" style={{ zIndex: 595 }} />
                     <Pane name="pane-restricoes" style={{ zIndex: 999 }} />
 
                     <PmRealtimeRecalc getRecalc={() => recalcRef.current} />
@@ -587,18 +877,45 @@ export default function GeomanLoteador() {
                                 return;
                             }
                             if (mode === "rua") {
-                                if (
-                                    gj.geometry.type === "LineString" ||
-                                    gj.geometry.type === "MultiLineString"
-                                ) {
-                                    addRuaFromGJ(gj, defaultRuaWidth);
+                                if (gj.geometry.type === "LineString" || gj.geometry.type === "MultiLineString") {
+                                    const g = gj.geometry;
+                                    if (g.type === "LineString") {
+                                        const coordsRaw = g.coordinates || [];
+                                        const coordsNum = coordsRaw.filter(
+                                            (c) => Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1])
+                                        );
+                                        // remove duplicados consecutivos
+                                        const coords = coordsNum.filter(
+                                            (pt, i, arr) => i === 0 || pt[0] !== arr[i - 1][0] || pt[1] !== arr[i - 1][1]
+                                        );
+                                        if (coords.length >= 2) {
+                                            addRuaFromGJ(
+                                                { ...gj, geometry: { type: "LineString", coordinates: coords } },
+                                                defaultRuaWidth
+                                            );
+                                        } else {
+                                            alert("Linha muito curta. Desenhe com pelo menos dois pontos.");
+                                        }
+                                    } else {
+                                        // MultiLineString → mantém só partes com 2+ pontos
+                                        const parts = (g.coordinates || []).filter(has2pts);
+                                        if (!parts.length) {
+                                            alert("Linha inválida.");
+                                            return;
+                                        }
+                                        const geom =
+                                            parts.length === 1
+                                                ? { type: "LineString", coordinates: parts[0] }
+                                                : { type: "MultiLineString", coordinates: parts };
+                                        addRuaFromGJ({ ...gj, geometry: geom }, defaultRuaWidth);
+                                    }
                                 }
                                 return;
                             }
                         }}
                     />
 
-                    {aoi && visible.aoi && (
+                    {aoi && (
                         <GeoJSON
                             pane="pane-aoi"
                             key="aoi"
@@ -608,61 +925,58 @@ export default function GeomanLoteador() {
                         />
                     )}
 
-                    {visible.areasVerdes &&
-                        areasVerdes.map((av, i) => (
-                            <GeoJSON
-                                pane="pane-avs"
-                                key={`av-${av?.properties?._uid ?? i}`}
-                                data={av}
-                                style={() => avStyle}
-                                onEachFeature={(feature, layer) => {
-                                    try {
-                                        const uid = av?.properties?._uid ?? i;
-                                        layer._avUid = uid;
-                                        // habilita edição quando entra no mapa
-                                        layer.once("add", () => {
-                                            setTimeout(() => {
-                                                try {
-                                                    layer.pm?.enable?.({
-                                                        allowSelfIntersection: false,
-                                                        snappable: true,
-                                                        snapDistance: 20,
-                                                    });
-                                                    layer.options.pmIgnore = false;
-                                                    layer.bringToFront?.();
-                                                    scheduleRecalc();
-                                                } catch { }
-                                            }, 0);
-                                        });
-                                        // eventos "live" → recálculo em tempo real
-                                        const recalcLive = () => scheduleRecalc();
-                                        layer.on("pm:markerdrag", recalcLive);
-                                        layer.on("pm:snap", recalcLive);
-                                        layer.on("pm:unsnap", recalcLive);
-                                        layer.on("pm:edit", recalcLive);
-                                        layer.on("pm:vertexadded", recalcLive);
-                                        layer.on("pm:vertexremoved", recalcLive);
-                                        layer.on("pm:drag", recalcLive);
-                                        // fim da edição → sincroniza estado e recalc
-                                        const syncEnd = () => {
-                                            syncLayerToState("av", uid, layer);
-                                            scheduleRecalc();
-                                        };
-                                        layer.on("pm:markerdragend", syncEnd);
-                                        layer.on("pm:editend", syncEnd);
-                                        layer.on("pm:dragend", syncEnd);
-                                        // remoção
-                                        const onPmRemove = () => {
-                                            setAreasVerdes((prev) => prev.filter((it) => (it?.properties?._uid ?? null) !== uid));
-                                            scheduleRecalc();
-                                        };
-                                        layer.on("pm:remove", onPmRemove);
-                                    } catch { }
-                                }}
-                            />
-                        ))}
+                    {/* Área Verde */}
+                    {areasVerdes.map((av, i) => (
+                        <GeoJSON
+                            pane="pane-avs"
+                            key={`av-${av?.properties?._uid ?? i}`}
+                            data={av}
+                            style={() => avStyle}
+                            onEachFeature={(feature, layer) => {
+                                try {
+                                    const uid = av?.properties?._uid ?? i;
+                                    layer._avUid = uid;
+                                    layer.once("add", () => {
+                                        setTimeout(() => {
+                                            try {
+                                                layer.pm?.enable?.({
+                                                    allowSelfIntersection: false,
+                                                    snappable: true,
+                                                    snapDistance: 20,
+                                                });
+                                                layer.options.pmIgnore = false;
+                                                layer.bringToFront?.();
+                                                scheduleRecalc();
+                                            } catch { }
+                                        }, 0);
+                                    });
+                                    const recalcLive = () => scheduleRecalc();
+                                    layer.on("pm:markerdrag", recalcLive);
+                                    layer.on("pm:snap", recalcLive);
+                                    layer.on("pm:unsnap", recalcLive);
+                                    layer.on("pm:edit", recalcLive);
+                                    layer.on("pm:vertexadded", recalcLive);
+                                    layer.on("pm:vertexremoved", recalcLive);
+                                    layer.on("pm:drag", recalcLive);
+                                    const syncEnd = () => {
+                                        syncLayerToState("av", uid, layer);
+                                        scheduleRecalc();
+                                    };
+                                    layer.on("pm:markerdragend", syncEnd);
+                                    layer.on("pm:editend", syncEnd);
+                                    layer.on("pm:dragend", syncEnd);
+                                    const onPmRemove = () => {
+                                        setAreasVerdes((prev) => prev.filter((it) => (it?.properties?._uid ?? null) !== uid));
+                                        scheduleRecalc();
+                                    };
+                                    layer.on("pm:remove", onPmRemove);
+                                } catch { }
+                            }}
+                        />
+                    ))}
 
-                    {areaLoteavel && visible.loteavel && (
+                    {/* Loteável */}
+                    {areaLoteavel && (
                         <GeoJSON
                             pane="pane-loteavel"
                             key={`loteavel-${areaLoteavel?.properties?._uid ?? "0"}`}
@@ -671,84 +985,116 @@ export default function GeomanLoteador() {
                         />
                     )}
 
-                    {visible.cortes &&
-                        cortes.map((c, i) => (
-                            <GeoJSON
-                                pane="pane-cortes"
-                                key={`corte-${c?.properties?._uid ?? i}`}
-                                data={c}
-                                style={() => corteStyle}
-                                onEachFeature={(feature, layer) => {
-                                    try {
-                                        const uid = c?.properties?._uid ?? i;
-                                        layer._corteUid = uid;
-                                        // habilita edição
-                                        layer.once("add", () => {
-                                            setTimeout(() => {
-                                                try {
-                                                    layer.pm?.enable?.({
-                                                        allowSelfIntersection: false,
-                                                        snappable: true,
-                                                        snapDistance: 20,
-                                                    });
-                                                    layer.options.pmIgnore = false;
-                                                    layer.bringToFront?.();
-                                                    scheduleRecalc();
-                                                } catch { }
-                                            }, 0);
-                                        });
-                                        // eventos "live"
-                                        const recalcLive = () => scheduleRecalc();
-                                        layer.on("pm:markerdrag", recalcLive);
-                                        layer.on("pm:snap", recalcLive);
-                                        layer.on("pm:unsnap", recalcLive);
-                                        layer.on("pm:edit", recalcLive);
-                                        layer.on("pm:vertexadded", recalcLive);
-                                        layer.on("pm:vertexremoved", recalcLive);
-                                        layer.on("pm:drag", recalcLive);
-                                        // fim da edição
-                                        const syncEnd = () => {
-                                            syncLayerToState("corte", uid, layer);
-                                            scheduleRecalc();
-                                        };
-                                        layer.on("pm:markerdragend", syncEnd);
-                                        layer.on("pm:editend", syncEnd);
-                                        layer.on("pm:dragend", syncEnd);
-                                        // remoção
-                                        const onPmRemove = () => {
-                                            setCortes((prev) => prev.filter((it) => (it?.properties?._uid ?? null) !== uid));
-                                            scheduleRecalc();
-                                        };
-                                        layer.on("pm:remove", onPmRemove);
-                                    } catch { }
-                                }}
-                            />
-                        ))}
-
-                    {visible.ruas && (
-                        <Ruas
-                            ruas={ruas}
-                            ruaMask={ruaMask}
-                            defaultRuaWidth={defaultRuaWidth}
-                            onRuaEdited={(uid, gj) => updateRuaGeometry(uid, gj)}
-                            onRuaRemoved={(uid) => removeRua(uid)}
-                            onRuaWidthPrompt={(uid, current) => {
-                                const val = window.prompt("Largura desta rua (m):", String(current));
-                                if (val == null) return;
-                                const width = Number(val);
-                                if (!Number.isFinite(width) || width <= 0) return;
-                                updateRuaWidth(uid, width);
+                    {/* Cortes */}
+                    {cortes.map((c, i) => (
+                        <GeoJSON
+                            pane="pane-cortes"
+                            key={`corte-${c?.properties?._uid ?? i}`}
+                            data={c}
+                            style={() => corteStyle}
+                            onEachFeature={(feature, layer) => {
+                                try {
+                                    const uid = c?.properties?._uid ?? i;
+                                    layer._corteUid = uid;
+                                    layer.once("add", () => {
+                                        setTimeout(() => {
+                                            try {
+                                                layer.pm?.enable?.({
+                                                    allowSelfIntersection: false,
+                                                    snappable: true,
+                                                    snapDistance: 20,
+                                                });
+                                                layer.options.pmIgnore = false;
+                                                layer.bringToFront?.();
+                                                scheduleRecalc();
+                                            } catch { }
+                                        }, 0);
+                                    });
+                                    const recalcLive = () => scheduleRecalc();
+                                    layer.on("pm:markerdrag", recalcLive);
+                                    layer.on("pm:snap", recalcLive);
+                                    layer.on("pm:unsnap", recalcLive);
+                                    layer.on("pm:edit", recalcLive);
+                                    layer.on("pm:vertexadded", recalcLive);
+                                    layer.on("pm:vertexremoved", recalcLive);
+                                    layer.on("pm:drag", recalcLive);
+                                    const syncEnd = () => {
+                                        syncLayerToState("corte", uid, layer);
+                                        scheduleRecalc();
+                                    };
+                                    layer.on("pm:markerdragend", syncEnd);
+                                    layer.on("pm:editend", syncEnd);
+                                    layer.on("pm:dragend", syncEnd);
+                                    const onPmRemove = () => {
+                                        setCortes((prev) => prev.filter((it) => (it?.properties?._uid ?? null) !== uid));
+                                        scheduleRecalc();
+                                    };
+                                    layer.on("pm:remove", onPmRemove);
+                                } catch { }
                             }}
                         />
+                    ))}
+
+                    {/* RUAS */}
+                    <Ruas
+                        ruas={ruas}
+                        ruaMask={ruaMask}
+                        defaultRuaWidth={defaultRuaWidth}
+                        paneRuas="pane-ruas"
+                        paneMask="pane-restricoes"
+                        onRuaEdited={(uid, gj) => updateRuaGeometry(uid, gj)}
+                        onRuaRemoved={(uid) => removeRua(uid)}
+                        onRuaWidthPrompt={(uid, current) => {
+                            const val = window.prompt("Largura desta rua (m):", String(current));
+                            if (val == null) return;
+                            const width = Number(val);
+                            if (!Number.isFinite(width) || width <= 0) return;
+                            updateRuaWidth(uid, width);
+                        }}
+                    />
+
+                    {/* Lotes */}
+                    {lotes.map((l, i) => (
+                        <GeoJSON pane="pane-lotes" key={`lot-${i}`} data={l} style={() => lotStyle} />
+                    ))}
+
+                    {/* OVERLAYS BASE do backend (visíveis por padrão) */}
+                    {overlayList.map((overlayId) => {
+                        if (!overlayVisible[overlayId]) return null;
+                        const fc = toFeatureCollection({
+                            type: "FeatureCollection",
+                            features: extrasByOverlay[overlayId]?.features || [],
+                        });
+                        if (!fc.features.length) return null;
+                        return (
+                            <GeoJSON
+                                pane="pane-overlays"
+                                key={`overlay-${overlayId}`}
+                                data={fc}
+                                style={styleForOverlayFeature(overlayId)}
+                                filter={(feat) => {
+                                    const g = feat?.geometry;
+                                    if (!g) return false;
+                                    if (g.type === "LineString") return has2pts(g.coordinates);
+                                    if (g.type === "MultiLineString") return (g.coordinates || []).some(has2pts);
+                                    return true; // polígonos/pontos passam
+                                }}
+                            />
+                        );
+                    })}
+
+                    {/* MARGENS GERADAS */}
+                    {Object.entries(marginGeoByOverlay).map(([overlayId, fc]) =>
+                        (marginUiByOverlay[overlayId]?.show ?? true) ? (
+                            <GeoJSON
+                                pane="pane-margens"
+                                key={`margem-${overlayId}-${(marginVersionByOverlay[overlayId] || 0)}`}
+                                data={fc}
+                                style={() => marginStyle}
+                                filter={(feat) => isValidLineGeom(feat?.geometry)}
+                            />
+                        ) : null
                     )}
-
-                    {visible.lotes &&
-                        lotes.map((l, i) => (
-                            <GeoJSON pane="pane-lotes" key={`lot-${i}`} data={l} style={() => lotStyle} />
-                        ))}
-
-                    {/* Extras (se existirem) */}
-                    {/* Se você usa extrasByOverlay, renderize-os aqui como no seu original */}
                 </MapContainer>
             </div>
         </div>
