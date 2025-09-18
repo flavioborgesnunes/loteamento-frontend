@@ -291,6 +291,7 @@ export default function GeomanLoteador() {
 
     // Outras camadas
     const [aoi, setAoi] = useState(null);
+    const aoiClipRef = useRef(null); // AOI autoritativa p/ clipping
     const [ruas, setRuas] = useState([]);
     const [lotes, setLotes] = useState([]);
 
@@ -310,7 +311,6 @@ export default function GeomanLoteador() {
 
     // UI / ferramentas
     const [drawMode, setDrawMode] = useState("none");
-
     const [drawNonce, setDrawNonce] = useState(0);
     const [showAreaVerde, setShowAreaVerde] = useState(false);
 
@@ -319,7 +319,7 @@ export default function GeomanLoteador() {
     const [ruaMaskRaw, setRuaMaskRaw] = useState(null);      // máscara antes do clip
     const [ruaMaskClip, setRuaMaskClip] = useState(null);    // máscara pós AOI
     const [ruaMask, setRuaMask] = useState(null);            // efetivamente exibida (clip se houver AOI; senão raw)
-    const [showRuaMask, setShowRuaMask] = useState(true);
+    // REMOVIDO: const [showRuaMask, setShowRuaMask] = useState(true);
 
     // ---------- Fetch projetos ----------
     useEffect(() => {
@@ -358,6 +358,12 @@ export default function GeomanLoteador() {
 
     function loadFixedRolesFromFC(fc) {
         const feats = fc?.features || [];
+
+        // Nunca aceitar AOI vinda de overlay (apenas a do summary vale)
+        const hasAoiOverlay = feats.some((f) => f.properties?.role === "aoi");
+        if (hasAoiOverlay) {
+            console.debug("[OVERLAY] Ignorando AOI de overlay; usamos apenas summary.aoi");
+        }
 
         // Áreas Verdes (todas)
         const avFeats = feats.filter(
@@ -437,6 +443,7 @@ export default function GeomanLoteador() {
                     "geojson"
                 );
                 setAoi(aoiFeat);
+                aoiClipRef.current = aoiFeat; // fixa AOI de clip diretamente do backend
                 acc.push(aoiFeat);
             }
 
@@ -507,29 +514,30 @@ export default function GeomanLoteador() {
             console.log("[MASK] raw area m2", rawArea);
 
             // 2) CLIP (robusto; usa shrink padrão interno)
+            const aoiForClip = aoiClipRef.current; // sempre a AOI do backend
             const clipped =
-                raw && aoi
-                    ? buildRuaRestrictionMaskClipped(ruas, aoi, defaultRuaWidth)
+                raw && aoiForClip
+                    ? buildRuaRestrictionMaskClipped(ruas, aoiForClip, defaultRuaWidth)
                     : null;
             setRuaMaskClip(clipped);
             const clippedArea = clipped ? turf.area(clipped) : 0;
 
-            // 3) Escolha do que exibir:
+            // 3) Escolha do que exibir (sempre visível se existir):
             const AREA_MIN = 1e-6;
             const visibleMask =
-                aoi && clipped && clippedArea > AREA_MIN ? clipped : raw || null;
+                aoiForClip && clipped && clippedArea > AREA_MIN ? clipped : raw || null;
             setRuaMask(visibleMask);
 
-            // 4) LOGS (fora da AOI)
             // 4) LOGS (diagnósticos seguros)
             try {
-                const aoiArea = aoi ? turf.area(aoi) : 0;
+                const aoiArea = aoiForClip ? turf.area(aoiForClip) : 0;
                 let outsideArea = 0;
                 if (raw && aoi && rawArea > AREA_MIN && booleanIntersectsSafe(raw, aoi)) {
                     try {
                         if (raw && aoi && raw.geometry && aoi.geometry) {
                             const diff = turf.difference(raw, aoi);
-                            // ...usar diff só se existir...
+                            // (apenas debug)
+                            if (diff) outsideArea = turf.area(diff);
                         }
                     } catch (e) {
                         console.debug("[ruaMask] difference(raw,aoi) falhou (ok)", e.message);
@@ -544,7 +552,7 @@ export default function GeomanLoteador() {
                     intersects: raw && aoi ? booleanIntersectsSafe(raw, aoi) : false,
                 });
                 if (raw) describeFeature("ruaMask_raw", raw);
-                if (aoi) describeFeature("aoi", aoi);
+                if (aoiForClip) describeFeature("aoi_backend", aoiForClip);
                 if (clipped) describeFeature("ruaMask_clipped", clipped);
                 if (raw && aoi && clippedArea <= 1e-9 && booleanIntersectsSafe(raw, aoi)) {
                     const canWarn =
@@ -567,9 +575,6 @@ export default function GeomanLoteador() {
             setRuaMask(null);
         }
     }, [ruas, defaultRuaWidth, aoi]);
-
-
-
 
     // ---------- Gerar Área Loteável já descontando restrições (ruas) ----------
     function gerarAreaLoteavelComRestricoes() {
@@ -702,14 +707,7 @@ export default function GeomanLoteador() {
                         min={0}
                     />
 
-                    <label className="ml-3 inline-flex items-center gap-1 text-sm cursor-pointer">
-                        <input
-                            type="checkbox"
-                            checked={showRuaMask}
-                            onChange={(e) => setShowRuaMask(e.target.checked)}
-                        />
-                        Mostrar máscara de ruas
-                    </label>
+                    {/* REMOVIDO: checkbox "Mostrar máscara de ruas" */}
 
                     {/* Desenhar rua */}
                     <button
@@ -1005,8 +1003,8 @@ export default function GeomanLoteador() {
                             />
                         ))}
 
-                    {/* Máscara de restrições de RUAS */}
-                    {showRuaMask && ruaMask && (
+                    {/* Máscara de restrições de RUAS — SEMPRE visível se existir */}
+                    {ruaMask && (
                         <GeoJSON
                             key={`ruaMask-${aoi ? "clip-or-fallback-raw" : "raw"}-${Math.round(turf.area(ruaMask))}`}
                             pane="pane-restricoes"
@@ -1066,6 +1064,17 @@ export default function GeomanLoteador() {
                                         }
                                     };
 
+                                    // *** NOVO: remover rua → remover do estado (e máscara recalc) ***
+                                    const onPmRemove = () => {
+                                        setRuas((prev) =>
+                                            prev.filter((it, idx) => {
+                                                const itUid = it?.properties?._uid ?? idx;
+                                                return itUid !== uid;
+                                            })
+                                        );
+                                        scheduleRecalc();
+                                    };
+
                                     const evsLive = [
                                         "pm:markerdrag",
                                         "pm:snap",
@@ -1079,6 +1088,8 @@ export default function GeomanLoteador() {
                                     ["pm:markerdragend", "pm:editend", "pm:dragend"].forEach((ev) =>
                                         layer.on(ev, syncEnd)
                                     );
+
+                                    layer.on("pm:remove", onPmRemove);
 
                                     // (Opcional) clique para editar largura por rua
                                     layer.on("click", () => {
