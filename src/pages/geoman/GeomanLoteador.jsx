@@ -25,26 +25,15 @@ import {
     fitToFeatures,
     featureWithOriginal,
     unionAll,
-    differenceMany,
     toFeatureCollection,
     makeParallelMargins,
     clipLinesToPolygon,
     extendLinesMeters,
+    ensureFeaturePolygon,
 } from "./geoUtils";
 
 const token = import.meta.env.VITE_MAPBOX_TOKEN?.trim();
 const DEBUG = true;
-function DBG(tag, obj = undefined) {
-    if (!DEBUG) return;
-    const ts = new Date().toISOString();
-    try {
-        obj !== undefined
-            ? console.log(`[GEOMAN][${ts}] ${tag}:`, obj)
-            : console.log(`[GEOMAN][${ts}] ${tag}`);
-    } catch {
-        console.log(`[GEOMAN][${ts}] ${tag} <cant-serialize>`);
-    }
-}
 
 function TilesWithFallback() {
     const hasToken = !!token;
@@ -156,9 +145,7 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                 console.error("[onCreateFeature] EXCEPTION:", err);
             } finally {
                 if (drawMode !== "areaVerde" && drawMode !== "corteLayer") {
-                    try {
-                        map.pm.disableDraw();
-                    } catch { }
+                    try { map.pm.disableDraw(); } catch { }
                 }
                 // Remoção segura do sketch
                 safeRemoveDraftLayer(map, e.layer);
@@ -172,9 +159,7 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
     }, [map, onCreateFeature, drawMode, onMapReady]);
 
     useEffect(() => {
-        try {
-            map.pm.disableDraw();
-        } catch { }
+        try { map.pm.disableDraw(); } catch { }
         if (drawMode === "areaVerde") {
             map.pm.enableDraw("Polygon", { snappable: true, snapDistance: 20, continueDrawing: true });
         } else if (drawMode === "corteLayer") {
@@ -194,27 +179,16 @@ function PmRealtimeRecalc({ getRecalc }) {
         if (raf.current) return;
         raf.current = requestAnimationFrame(() => {
             raf.current = null;
-            try {
-                getRecalc()?.();
-            } catch { }
+            try { getRecalc()?.(); } catch { }
         });
     };
 
     useEffect(() => {
         if (!map) return;
         const events = [
-            "pm:markerdrag",
-            "pm:markerdragend",
-            "pm:edit",
-            "pm:editend",
-            "pm:vertexadded",
-            "pm:vertexremoved",
-            "pm:snap",
-            "pm:unsnap",
-            "pm:create",
-            "pm:remove",
-            "pm:drag",
-            "pm:dragend",
+            "pm:markerdrag", "pm:markerdragend", "pm:edit", "pm:editend",
+            "pm:vertexadded", "pm:vertexremoved", "pm:snap", "pm:unsnap",
+            "pm:create", "pm:remove", "pm:drag", "pm:dragend",
         ];
         events.forEach((ev) => map.on(ev, schedule));
         return () => {
@@ -224,6 +198,17 @@ function PmRealtimeRecalc({ getRecalc }) {
     }, [map]);
 
     return null;
+}
+
+// ---- helper de erro seguro (evita "Converting circular structure to JSON")
+function safePickAxiosError(err) {
+    const isAxios = !!err?.isAxiosError;
+    const status = err?.response?.status ?? null;
+    const data = err?.response?.data ?? null;
+    const message = err?.message ?? null;
+    const url = err?.config?.url ?? null;
+    const method = err?.config?.method ?? null;
+    return { isAxios, status, data, message, url, method };
 }
 
 export default function GeomanLoteador() {
@@ -265,9 +250,7 @@ export default function GeomanLoteador() {
         if (recalcRAF.current) return;
         recalcRAF.current = requestAnimationFrame(() => {
             recalcRAF.current = null;
-            try {
-                recalcRef.current?.();
-            } catch { }
+            try { recalcRef.current?.(); } catch { }
         });
     }, [recalcRef]);
     useEffect(() => () => {
@@ -286,7 +269,7 @@ export default function GeomanLoteador() {
 
     // RUAS via hook separado
     const {
-        ruas,
+        ruas: ruasState,
         defaultRuaWidth,
         setDefaultRuaWidth,
         ruaMask,
@@ -317,13 +300,23 @@ export default function GeomanLoteador() {
     const filterValidLineFeats = (fcOrFeat) =>
         toFeatureCollection(fcOrFeat).features.filter((f) => isValidLineGeom(f.geometry || {}));
 
+    const [aoiAreaM2, setAoiAreaM2] = useState(0);
+    const [loteavelAreaM2, setLoteavelAreaM2] = useState(0);
+
+    const [restricoesList, setRestricoesList] = useState([]);
+    const [labelVersao, setLabelVersao] = useState("");
+    const [isSaving, setIsSaving] = useState(false);
+    const [isListing, setIsListing] = useState(false);
+
+
+
     useEffect(() => {
         (async () => {
             try {
                 const { data: list } = await axiosAuth.get("projetos/");
                 setProjetos(list);
             } catch (e) {
-                console.error("[fetch projetos] erro:", e);
+                console.error("[fetch projetos] erro:", safePickAxiosError(e));
                 alert("Erro ao carregar projetos (faça login).");
             }
         })();
@@ -405,6 +398,7 @@ export default function GeomanLoteador() {
         setCortes([]);
         corteLayerByUid.current = new Map();
         setAreaLoteavel(null);
+        setLoteavelAreaM2(0);
         setLotes([]);
 
         setExtrasByOverlay({});
@@ -420,6 +414,7 @@ export default function GeomanLoteador() {
             if (summary?.aoi) {
                 const aoiFeat = featureWithOriginal({ type: "Feature", geometry: summary.aoi }, "geojson");
                 setAoi(aoiFeat);
+                setAoiAreaM2(areaM2Of(aoiFeat));
                 acc.push(aoiFeat);
             }
 
@@ -448,28 +443,57 @@ export default function GeomanLoteador() {
                 fitToFeatures(mapRef.current, { type: "FeatureCollection", features: acc });
             setTimeout(() => recalcRef.current?.(), 0);
         } catch (e) {
-            console.error("[abrirProjeto] erro:", e);
+            console.error("[abrirProjeto] erro:", safePickAxiosError(e));
             alert("Não foi possível abrir o projeto.");
         }
     }
 
-    function gerarAreaLoteavelComRestricoes() {
-        const avUnion = unionAll(areasVerdes);
-        const cortesUnion = unionAll(cortes);
-        let base = avUnion;
-        if (base && cortesUnion) base = differenceMany(base, [cortesUnion]);
-        const masks = ruaMask ? [ruaMask] : [];
-        const final = base ? differenceMany(base, masks) : null;
-
-        setAreaLoteavel(
-            final ? { ...final, properties: { ...(final.properties || {}), _uid: "loteavel-ruas" } } : null
-        );
+    // ---------- Medidas / normalização ----------
+    function isPolyGeomLike(x) {
+        if (!x) return false;
+        if (x.type === "Feature") {
+            const t = x.geometry?.type;
+            return t === "Polygon" || t === "MultiPolygon";
+        }
+        if (x.type === "FeatureCollection") {
+            return (x.features || []).some((f) => isPolyGeomLike(f));
+        }
+        return x.type === "Polygon" || x.type === "MultiPolygon";
     }
 
-    // ===== Helpers Margens / tipos =====
+    function toPolygonFeature(x) {
+        if (!x) return null;
+        if (x.type === "Feature") return isPolyGeomLike(x) ? x : null;
+        if (x.type === "FeatureCollection") {
+            const polys = (x.features || []).filter(isPolyGeomLike);
+            if (!polys.length) return null;
+            try { return unionAll(polys); } catch { return null; }
+        }
+        if (x.type === "Polygon" || x.type === "MultiPolygon") {
+            return { type: "Feature", geometry: x, properties: {} };
+        }
+        return null;
+    }
+
+    function makeValidPoly(input, label = "geom") {
+        if (!input) return null;
+        try {
+            const f = ensureFeaturePolygon(input, label);
+            try { return turf.cleanCoords(f); } catch { return f; }
+        } catch { return null; }
+    }
+
+    function areaM2Of(x) {
+        try { const f = toPolygonFeature(x); return f ? turf.area(f) : 0; }
+        catch { return 0; }
+    }
+
+    // ---------- Linhas / overlays utilitários ----------
     const isLineFeature = (f) =>
         f?.geometry?.type === "LineString" || f?.geometry?.type === "MultiLineString";
-    const overlayHasLines = (overlay) => (overlay?.features || []).some((f) => isLineFeature(f));
+
+    const overlayHasLines = (overlay) =>
+        (overlay?.features || []).some((f) => isLineFeature(f));
 
     // Todos overlays ordenados
     const overlayList = useMemo(
@@ -666,8 +690,169 @@ export default function GeomanLoteador() {
         return { color: baseColor, weight: 2, opacity: 1 };
     };
 
+    // Monta payload ad-hoc para o backend (sem salvar).
+    // Converte overlays lineares em "rios / lt / ferrovias" por palavras-chave no overlayId
+    // e aplica a distância configurada na UI como `margem_m`. Ruas usam `width_m`.
+
+    const buildAdHocRestricoes = (overlayMapOverride) => {
+
+        const aoiGeom = aoi?.geometry || null;
+        // 1) AV e Corte de AV
+        const av = {
+            type: "FeatureCollection",
+            features: (areasVerdes || []).map((f) => ({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: {},
+            })),
+        };
+        const corte_av = {
+            type: "FeatureCollection",
+            features: (cortes || []).map((f) => ({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: {},
+            })),
+        };
+
+        // 2) Ruas
+        const defaultRuaWidthNum = Number.isFinite(+defaultRuaWidth) ? +defaultRuaWidth : 12;
+        const ruas = {
+            type: "FeatureCollection",
+            features: (ruasState || []).map((f) => ({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: {
+                    width_m:
+                        Number.isFinite(+f?.properties?.width_m)
+                            ? +f.properties.width_m
+                            : defaultRuaWidthNum,
+                },
+            })),
+        };
+
+        // 3) Mapear overlays lineares → rios / lt / ferrovias
+        const overlayMap = {
+            rios: ["rio", "rios", "hidro", "hidrograf", "drenagem", "curso", "app_rios"],
+            lt: ["lt", "linhas", "transmiss", "energia", "eletric", "linha_de_transmissao"],
+            ferrovias: ["ferrovia", "ferrov", "rail", "trem", "railway", "via_ferrea"],
+        };
+
+        const matchKind = (overlayId, kind) => {
+            const id = String(overlayId || "").toLowerCase();
+            return (overlayMap[kind] || []).some((kw) => id.includes(kw));
+        };
+
+        const isLineFeature = (f) =>
+            !!f?.geometry &&
+            (f.geometry.type === "LineString" || f.geometry.type === "MultiLineString");
+
+        // Defaults caso a UI não tenha distância configurada
+        const DEF_MARGEM_RIO = 30;
+        const DEF_MARGEM_LT = 15;
+        const DEF_MARGEM_FER = 20;
+
+        const riosFeats = [];
+        const ltFeats = [];
+        const ferFeats = [];
+
+        Object.entries(extrasByOverlay || {}).forEach(([overlayId, pack]) => {
+            // OBS: diferente da versão anterior, NÃO filtramos mais por dist>0
+            const distUI = Number(marginUiByOverlay?.[overlayId]?.dist);
+            const distRio = Number.isFinite(distUI) && distUI > 0 ? distUI : DEF_MARGEM_RIO;
+            const distLT = Number.isFinite(distUI) && distUI > 0 ? distUI : DEF_MARGEM_LT;
+            const distFer = Number.isFinite(distUI) && distUI > 0 ? distUI : DEF_MARGEM_FER;
+
+            const targetKind = matchKind(overlayId, "rios")
+                ? "rios"
+                : matchKind(overlayId, "lt")
+                    ? "lt"
+                    : matchKind(overlayId, "ferrovias")
+                        ? "ferrovias"
+                        : null;
+
+            if (!targetKind) return;
+
+            (pack.features || [])
+                .filter(isLineFeature)
+                .forEach((f) => {
+                    const base = {
+                        type: "Feature",
+                        geometry: f.geometry,
+                        properties: {},
+                    };
+                    if (targetKind === "rios") {
+                        base.properties.margem_m = distRio;
+                        riosFeats.push(base);
+                    } else if (targetKind === "lt") {
+                        base.properties.margem_m = distLT;
+                        ltFeats.push(base);
+                    } else if (targetKind === "ferrovias") {
+                        base.properties.margem_m = distFer;
+                        ferFeats.push(base);
+                    }
+                });
+        });
+
+        const rios = { type: "FeatureCollection", features: riosFeats };
+        const lt = { type: "FeatureCollection", features: ltFeats };
+        const ferrovias = { type: "FeatureCollection", features: ferFeats };
+
+        return {
+            aoi: aoiGeom,
+            av,
+            corte_av,
+            ruas,
+            rios,
+            lt,
+            ferrovias,
+            default_rua_width: defaultRuaWidthNum,
+            def_margem_rio: DEF_MARGEM_RIO,
+            def_margem_lt: DEF_MARGEM_LT,
+            def_margem_fer: DEF_MARGEM_FER,
+            srid_in: 4326,
+        };
+    };
+
+
+    async function salvarRestricoesVersao() {
+        if (!projetoSel) { alert("Selecione um projeto."); return; }
+        setIsSaving(true);
+        try {
+            const payload = {
+                label: labelVersao || "",
+                notes: "gerado no Geoman",
+                percent_permitido: Number(percentPermitido || 0),
+                source: "geoman",
+                adHoc: buildAdHocRestricoes(),   // <- usa sua função existente
+            };
+            const { data } = await axiosAuth.post(`/projetos/${projetoSel}/restricoes/`, payload);
+            console.log("[restrições criada]", data);
+            alert(`Versão salva: v${data.version}`);
+
+        } catch (e) {
+            console.error("[salvar restrições] erro:", safePickAxiosError(e));
+            alert("Erro ao salvar as restrições.");
+        } finally {
+            setIsSaving(false);
+        }
+    }
+
+    // ======= RENDER =======
     return (
         <div className="w-full h-full relative">
+            <div className="absolute z-[1000] bottom-70 flex items-center w-100 gap-4 text-sm bg-white/60 rounded-lg px-3 py-2">
+                <div className="space-y-0.5">
+                    <div className="font-medium">AOI</div>
+                    <div>{(aoiAreaM2 / 1e6).toFixed(4)} km² • {(aoiAreaM2 / 10000).toFixed(2)} ha • {aoiAreaM2.toFixed(0)} m²</div>
+                </div>
+                <div className="w-px h-6 bg-gray-300" />
+                <div className="space-y-0.5">
+                    <div className="font-medium">Área Loteável</div>
+                    <div>{(loteavelAreaM2 / 1e6).toFixed(4)} km² • {(loteavelAreaM2 / 10000).toFixed(2)} ha • {loteavelAreaM2.toFixed(0)} m²</div>
+                </div>
+            </div>
+
             {/* Painel principal (projetos / AV / Ruas / Loteável) */}
             <div className="absolute z-[1000] bottom-10 left-2 bg-white/40 rounded-xl shadow p-3 space-y-3 max-w-[1080px]">
                 <div className="flex items-center gap-2">
@@ -717,17 +902,65 @@ export default function GeomanLoteador() {
                     </button>
                 </div>
 
-                <button
-                    onClick={gerarAreaLoteavelComRestricoes}
-                    className="px-3 py-2 rounded bg-blue-700 text-white"
+                {/* <button
+                    disabled={!projetoSel || isComputingAL}
+                    onClick={async () => {
+                        if (!projetoSel) {
+                            alert("Selecione um projeto antes de gerar a Área Loteável.");
+                            return;
+                        }
+                        const res = await gerarAreaLoteavelComRestricoes(projetoSel, {
+                            persist: true,
+                            clean_previous: true,
+                        });
+                        if (!res) return;
+
+                        // monta Feature para exibir
+                        const feat = {
+                            type: "Feature",
+                            geometry: res.geometry,
+                            properties: { role: "loteavel", _uid: "al-0" },
+                        };
+                        setAreaLoteavel(feat);
+                        setLoteavelAreaM2(res.area_m2 || 0);
+
+                        // fit no mapa
+                        try {
+                            if (mapRef.current && res.geometry) {
+                                fitToFeatures(mapRef.current, feat);
+                            }
+                        } catch { }
+                    }}
+                    className={`px-3 py-2 rounded ${(!projetoSel || isComputingAL) ? "bg-gray-300 text-gray-600" : "bg-blue-700 text-white"}`}
                     title="AVs − cortes − restrições (máscara de ruas)"
                 >
-                    Gerar Área Loteável
-                </button>
+                    {isComputingAL ? "Gerando Área Loteável..." : "Gerar Área Loteável"}
+                </button> */}
+                <div className="flex items-center gap-2 mt-2">
+                    <input
+                        type="text"
+                        className="border p-2 rounded w-72"
+                        placeholder="Rótulo da versão (opcional)"
+                        value={labelVersao}
+                        onChange={(e) => setLabelVersao(e.target.value)}
+                    />
+                    <button
+                        onClick={salvarRestricoesVersao}
+                        disabled={!projetoSel || isSaving}
+                        className={`px-3 py-2 rounded ${(!projetoSel || isSaving)
+                            ? "bg-gray-300 text-gray-600"
+                            : "bg-emerald-700 text-white"
+                            }`}
+                        title="Salvar nova versão de restrições (AV, cortes, ruas, margens)"
+                    >
+                        {isSaving ? "Salvando..." : "Salvar versão de restrições"}
+                    </button>
+                </div>
+
             </div>
 
             {/* Painel de Camadas do Backend (visíveis por padrão) + Margens (somente linhas) */}
-            <div className="absolute z-[1000] top-2 left-2 bg-white/90 rounded-xl shadow p-3 space-y-2 min-w-[460px] max-w-[700px]">
+            <div className="absolute z-[1000] top-75 left-2 bg-white/60 rounded-xl shadow p-3 space-y-2 min-w-[460px] max-w-[700px]">
                 <div className="flex items-center justify-between">
                     <h3 className="font-semibold">Camadas do backend</h3>
                     <button
@@ -864,18 +1097,10 @@ export default function GeomanLoteador() {
                     <MapEffects
                         drawMode={drawMode}
                         drawNonce={drawNonce}
-                        onMapReady={(m) => {
-                            mapRef.current = m;
-                        }}
+                        onMapReady={(m) => { mapRef.current = m; }}
                         onCreateFeature={(mode, gj) => {
-                            if (mode === "areaVerde") {
-                                addAreaVerdeFromGJ(gj);
-                                return;
-                            }
-                            if (mode === "corteLayer") {
-                                addCorteFromGJ(gj);
-                                return;
-                            }
+                            if (mode === "areaVerde") { addAreaVerdeFromGJ(gj); return; }
+                            if (mode === "corteLayer") { addCorteFromGJ(gj); return; }
                             if (mode === "rua") {
                                 if (gj.geometry.type === "LineString" || gj.geometry.type === "MultiLineString") {
                                     const g = gj.geometry;
@@ -898,11 +1123,9 @@ export default function GeomanLoteador() {
                                         }
                                     } else {
                                         // MultiLineString → mantém só partes com 2+ pontos
-                                        const parts = (g.coordinates || []).filter(has2pts);
-                                        if (!parts.length) {
-                                            alert("Linha inválida.");
-                                            return;
-                                        }
+                                        const has2 = (coords) => Array.isArray(coords) && coords.length >= 2;
+                                        const parts = (g.coordinates || []).filter(has2);
+                                        if (!parts.length) { alert("Linha inválida."); return; }
                                         const geom =
                                             parts.length === 1
                                                 ? { type: "LineString", coordinates: parts[0] }
@@ -910,7 +1133,6 @@ export default function GeomanLoteador() {
                                         addRuaFromGJ({ ...gj, geometry: geom }, defaultRuaWidth);
                                     }
                                 }
-                                return;
                             }
                         }}
                     />
@@ -1037,7 +1259,7 @@ export default function GeomanLoteador() {
 
                     {/* RUAS */}
                     <Ruas
-                        ruas={ruas}
+                        ruas={ruasState}
                         ruaMask={ruaMask}
                         defaultRuaWidth={defaultRuaWidth}
                         paneRuas="pane-ruas"
@@ -1075,8 +1297,9 @@ export default function GeomanLoteador() {
                                 filter={(feat) => {
                                     const g = feat?.geometry;
                                     if (!g) return false;
-                                    if (g.type === "LineString") return has2pts(g.coordinates);
-                                    if (g.type === "MultiLineString") return (g.coordinates || []).some(has2pts);
+                                    const has2 = (coords) => Array.isArray(coords) && coords.length >= 2;
+                                    if (g.type === "LineString") return has2(g.coordinates);
+                                    if (g.type === "MultiLineString") return (g.coordinates || []).some(has2);
                                     return true; // polígonos/pontos passam
                                 }}
                             />

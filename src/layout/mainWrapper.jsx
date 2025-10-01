@@ -77,7 +77,8 @@ const MainWrapper = () => {
                             <ItemMenu icon={FileUp} text="Novo Estudo" to="/estudo" />
                             <ItemMenu icon={MonitorDown} text="Projetos" to="/projetos" />
                             <ItemMenu icon={Eye} text="Visualizar" to="/visualizar-projetos" />
-                            <ItemMenu icon={MapPlus} text="Loteador" to="/loteador" />
+                            <ItemMenu icon={Eye} text="Vis. Restrições" to="/visualizar-restricoes" />
+                            <ItemMenu icon={MapPlus} text="Restrições" to="/loteador" />
                             <ItemMenu icon={Brain} text="Estudo com AI" to="/ia" />
                             {(user.role === 'dono' || user.role === 'adm') && (
 
