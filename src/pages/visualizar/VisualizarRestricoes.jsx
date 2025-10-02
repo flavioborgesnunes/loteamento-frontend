@@ -1,17 +1,11 @@
 // src/pages/geoman/RestricoesViewer.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-    MapContainer,
-    TileLayer,
-    LayersControl,
-    GeoJSON,
-    Pane,
-} from "react-leaflet";
+import { MapContainer, TileLayer, LayersControl, GeoJSON, Pane, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import useAxios from "../../utils/useAxios";
 
-// --------- Tiles (Mapbox se houver token; senão Esri/OSM) ----------
+// ---------- Tiles ----------
 const token = import.meta.env.VITE_MAPBOX_TOKEN?.trim();
 function TilesWithFallback() {
     const hasToken = !!token;
@@ -53,104 +47,137 @@ function TilesWithFallback() {
             )}
             <LayersControl.BaseLayer checked={!hasToken} name="Esri World Imagery">
                 <TileLayer
-                    // ✅ corrigido: faltava uma "/" entre {y} e {x}
                     url="https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                     attribution="Tiles &copy; Esri"
                 />
             </LayersControl.BaseLayer>
             <LayersControl.BaseLayer name="OSM (Ruas)">
-                <TileLayer
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    attribution="&copy; OpenStreetMap"
-                />
+                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
             </LayersControl.BaseLayer>
         </LayersControl>
     );
 }
 
-// --------- Helpers de FC/Bounds/Zoom ----------
+// ---------- Helpers FC/Bounds ----------
 function toFC(x) {
     if (!x) return { type: "FeatureCollection", features: [] };
     if (x.type === "FeatureCollection") return x;
     if (x.type === "Feature") return { type: "FeatureCollection", features: [x] };
     return { type: "FeatureCollection", features: [] };
 }
-
 function isNonEmptyFC(fc) {
-    return fc && fc.type === "FeatureCollection" && Array.isArray(fc.features) && fc.features.length > 0;
+    return fc?.type === "FeatureCollection" && Array.isArray(fc.features) && fc.features.length > 0;
 }
-
-// junta tudo que o endpoint /restricoes/{id}/geo/ devolve pra fazer um fit robusto
-function collectForFitFromGeo(data) {
-    const merged = { type: "FeatureCollection", features: [] };
-    const pushFC = (fcLike) => {
-        const fc = toFC(fcLike);
-        if (isNonEmptyFC(fc)) merged.features.push(...fc.features);
-    };
-    // aoi (ou aoi_snapshot)
-    const aoiGeom = data?.aoi || data?.aoi_snapshot || null;
-    const fcAOI = aoiGeom ? toFC({ type: "Feature", geometry: aoiGeom, properties: {} }) : null;
-
-    // coleções principais
-    pushFC(data?.av);
-    pushFC(data?.corte_av);
-    pushFC(data?.ruas);
-    pushFC(data?.rua_mask);
-    pushFC(data?.rios_faixa);
-    pushFC(data?.lt_faixa);
-    pushFC(data?.ferrovias_faixa);
-
-    return { acc: merged, fcAOI };
-}
-
 function computeBoundsFromFCs(listOfFCs = []) {
     const merged = { type: "FeatureCollection", features: [] };
-    listOfFCs.forEach(fc => { if (isNonEmptyFC(fc)) merged.features.push(...fc.features); });
+    listOfFCs.forEach((fc) => {
+        const f = toFC(fc);
+        if (isNonEmptyFC(f)) merged.features.push(...f.features);
+    });
     if (!merged.features.length) return null;
     const layer = L.geoJSON(merged);
     const b = layer.getBounds?.();
     try { layer.remove?.(); } catch { }
-    return (b && b.isValid()) ? b : null;
+    return b && b.isValid() ? b : null;
 }
 
-function fitMapToCollections(map, listOfFCs) {
-    if (!map) return;
-    const b = computeBoundsFromFCs(listOfFCs);
-    if (!b) return;
-    try { map.invalidateSize(false); } catch { }
-    try { map.fitBounds(b, { padding: [30, 30] }); } catch { }
-    // reforços de layout
-    requestAnimationFrame(() => {
-        try { map.invalidateSize(false); } catch { }
-        try { map.fitBounds(b, { padding: [30, 30] }); } catch { }
-    });
-    setTimeout(() => {
-        try { map.invalidateSize(false); } catch { }
-        try { map.fitBounds(b, { padding: [30, 30] }); } catch { }
-    }, 120);
+function buildFCsForFit(geo) {
+    if (!geo) return { fcAOI: null, all: null };
+    const aoiGeom = geo?.aoi || geo?.aoi_snapshot || null;
+    const fcAOI = aoiGeom ? toFC({ type: "Feature", geometry: aoiGeom, properties: {} }) : null;
+
+    const fcs = [
+        toFC(geo?.av), toFC(geo?.corte_av),
+        toFC(geo?.ruas_eixo), toFC(geo?.ruas_mask),
+        toFC(geo?.rios_centerline), toFC(geo?.rios_faixa),
+        toFC(geo?.lt_centerline), toFC(geo?.lt_faixa),
+        toFC(geo?.ferrovias_centerline), toFC(geo?.ferrovias_faixa),
+    ];
+    const all = { type: "FeatureCollection", features: [] };
+    fcs.forEach((fc) => { if (fc?.features?.length) all.features.push(...fc.features); });
+
+    return { fcAOI, all: isNonEmptyFC(all) ? all : null };
 }
 
-// --------- Estilos ----------
+// ---------- Estilos ----------
 const styleAoi = { color: "#2c7be5", weight: 2, fillOpacity: 0.05, opacity: 1 };
 const styleAV = { color: "#007a4d", fillColor: "#41d686", fillOpacity: 0.45, weight: 2 };
 const styleCorte = { color: "#e11d48", fillColor: "#fca5a5", fillOpacity: 0.35, weight: 2, dashArray: "6 3" };
-const styleRua = { color: "#333", weight: 3, opacity: 1 };
+const styleRuaEixo = { color: "#333", weight: 3, opacity: 1 };
+const styleRuaMask = { color: "#333", weight: 1, opacity: 0.7, fillOpacity: 0.25 };
+const styleRiosCL = { color: "#2E86AB", weight: 2, opacity: 1 };
 const styleRiosFx = { color: "#2E86AB", weight: 2, opacity: 1, fillOpacity: 0.25 };
+const styleLTCL = { color: "#A84300", weight: 2, opacity: 1 };
 const styleLTFx = { color: "#A84300", weight: 2, opacity: 1, fillOpacity: 0.25 };
+const styleFerCL = { color: "#6D4C41", weight: 2, opacity: 1 };
 const styleFerFx = { color: "#6D4C41", weight: 2, opacity: 1, fillOpacity: 0.25 };
 
-// --------- Componente principal ----------
+// ---------- Popups ----------
+const onEachWithPopup = (getHtml) => (feature, layer) => {
+    const html = getHtml?.(feature) || "";
+    if (html) layer.bindPopup(html);
+};
+const ruaEixoPopup = (f) => (f?.properties?.width_m != null ? `<b>Rua</b><br/>largura: ${Number(f.properties.width_m).toFixed(2)} m` : "<b>Rua</b>");
+const ruaMaskPopup = (f) => (f?.properties?.width_m != null ? `<b>Máscara de Rua</b><br/>largura: ${Number(f.properties.width_m).toFixed(2)} m` : "<b>Máscara de Rua</b>");
+const margemPopup = (label) => (f) => (f?.properties?.margem_m != null ? `<b>${label}</b><br/>margem: ${Number(f.properties.margem_m).toFixed(2)} m` : `<b>${label}</b>`);
+
+// ---------- Componente que faz o FIT (prioriza AOI) ----------
+function FitToData({ geo, restricaoId }) {
+    const map = useMap();
+    const fittedRef = useRef(null);
+
+    useEffect(() => {
+        if (!map || !geo || !restricaoId) return;
+
+        // evita refit desnecessário para a mesma versão
+        if (fittedRef.current === restricaoId) return;
+
+        const { fcAOI, all } = buildFCsForFit(geo);
+
+        // 1) tenta AOI
+        let bounds = computeBoundsFromFCs(fcAOI ? [fcAOI] : []);
+        // 2) fallback: tudo
+        if (!bounds) bounds = computeBoundsFromFCs(all ? [all] : []);
+
+        if (bounds) {
+            try { map.invalidateSize(false); } catch { }
+            try { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 }); } catch { }
+
+            // reforços contra race com render de tiles/layers
+            requestAnimationFrame(() => {
+                try { map.invalidateSize(false); } catch { }
+                try { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 }); } catch { }
+            });
+            setTimeout(() => {
+                try { map.invalidateSize(false); } catch { }
+                try { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 }); } catch { }
+            }, 120);
+
+            fittedRef.current = restricaoId;
+        }
+    }, [map, geo, restricaoId]);
+
+    // refita se tiles carregarem depois
+    useEffect(() => {
+        if (!map) return;
+        const onResize = () => { try { map.invalidateSize(false); } catch { } };
+        map.on("resize", onResize);
+        return () => { map.off("resize", onResize); };
+    }, [map]);
+
+    return null;
+}
+
+// ---------- Página ----------
 export default function RestricoesViewer() {
     const axiosAuth = useAxios();
     const mapRef = useRef(null);
 
-    // selects
     const [projetos, setProjetos] = useState([]);
     const [projetoSel, setProjetoSel] = useState("");
     const [versoes, setVersoes] = useState([]);
     const [restricaoSel, setRestricaoSel] = useState("");
 
-    // dados carregados
     const [geo, setGeo] = useState(null);
 
     // carregar projetos
@@ -166,7 +193,7 @@ export default function RestricoesViewer() {
         })();
     }, []);
 
-    // ao mudar projeto: limpa e lista versões
+    // ao mudar projeto: carrega versões
     useEffect(() => {
         setVersoes([]);
         setRestricaoSel("");
@@ -176,6 +203,8 @@ export default function RestricoesViewer() {
             try {
                 const { data } = await axiosAuth.get(`/projetos/${projetoSel}/restricoes/list/`);
                 setVersoes(data || []);
+                // opcional: auto-selecionar a mais recente:
+                // if (data?.length) setRestricaoSel(data[0].id);
             } catch (e) {
                 console.error("[listar versões] erro:", e?.message || e);
                 alert("Erro ao listar versões.");
@@ -183,64 +212,15 @@ export default function RestricoesViewer() {
         })();
     }, [projetoSel]);
 
-    // FIT prioritário na AOI; fallback nas demais coleções
-    // FIT prioritário na AOI; fallback nas demais coleções (sem loop)
-    const fittedForIdRef = useRef(null);
+    // abrir versão
     useEffect(() => {
         setGeo(null);
-        fittedForIdRef.current = null;
         if (!restricaoSel) return;
-
         const ac = new AbortController();
         (async () => {
             try {
                 const { data } = await axiosAuth.get(`/restricoes/${restricaoSel}/geo/`, { signal: ac.signal });
                 setGeo(data);
-
-                const map = mapRef.current;
-                if (!map) return;
-                if (fittedForIdRef.current === restricaoSel) return; // já deu fit nessa versão
-
-                // junta tudo que o endpoint devolve (igual lógica do abrirProjeto)
-                const merged = { type: "FeatureCollection", features: [] };
-                const pushFC = (fcLike) => {
-                    const fc = toFC(fcLike);
-                    if (fc?.features?.length) merged.features.push(...fc.features);
-                };
-
-                // aoi (ou aoi_snapshot)
-                const aoiGeom = data?.aoi || data?.aoi_snapshot || null;
-                const fcAOI = aoiGeom
-                    ? toFC({ type: "Feature", geometry: aoiGeom, properties: {} })
-                    : null;
-
-                // coleções
-                pushFC(data?.av);
-                pushFC(data?.corte_av);
-                pushFC(data?.ruas);
-                pushFC(data?.rua_mask);
-                pushFC(data?.rios_faixa);
-                pushFC(data?.lt_faixa);
-                pushFC(data?.ferrovias_faixa);
-
-                // 1) se tiver AOI, prioriza fit só nela
-                if (fcAOI && fcAOI.features.length) {
-                    fitMapToCollections(map, [fcAOI]);
-                    fittedForIdRef.current = restricaoSel;
-                    return;
-                }
-
-                // 2) fallback: fit em tudo que coletamos
-                if (merged.features.length) {
-                    fitMapToCollections(map, [merged]);
-                    fittedForIdRef.current = restricaoSel;
-                    return;
-                }
-
-                // 3) fallback final: centro padrão
-                map.setView([-14, -55], 4);
-                fittedForIdRef.current = restricaoSel;
-
             } catch (e) {
                 if (e?.name === "CanceledError" || e?.message === "canceled") return;
                 console.error("[abrir versão] erro:", e?.message || e);
@@ -250,8 +230,7 @@ export default function RestricoesViewer() {
         return () => ac.abort();
     }, [restricaoSel]);
 
-
-    // AOI (para render, caso venha no payload)
+    // AOI para render
     const aoiFC = useMemo(() => {
         const g = geo?.aoi || geo?.aoi_snapshot;
         return g ? toFC({ type: "Feature", geometry: g, properties: {} }) : null;
@@ -297,14 +276,12 @@ export default function RestricoesViewer() {
                     style={{ height: "100%", width: "100%" }}
                     whenCreated={(m) => {
                         mapRef.current = m;
-                        setTimeout(() => {
-                            try { m.invalidateSize(false); } catch { }
-                        }, 0);
+                        setTimeout(() => { try { m.invalidateSize(false); } catch { } }, 0);
                     }}
                 >
                     <TilesWithFallback />
 
-                    {/* Panes com ordem de desenho */}
+                    {/* Panes */}
                     <Pane name="pane-aoi" style={{ zIndex: 520 }} />
                     <Pane name="pane-av" style={{ zIndex: 580 }} />
                     <Pane name="pane-corte" style={{ zIndex: 585 }} />
@@ -313,33 +290,47 @@ export default function RestricoesViewer() {
                     <Pane name="pane-lt" style={{ zIndex: 596 }} />
                     <Pane name="pane-ferrovias" style={{ zIndex: 597 }} />
 
+                    {/* AOI */}
                     {aoiFC && <GeoJSON pane="pane-aoi" data={aoiFC} style={() => styleAoi} />}
 
-                    {geo?.av && (
-                        <GeoJSON pane="pane-av" data={toFC(geo.av)} style={() => styleAV} />
+                    {/* AV / Cortes */}
+                    {geo?.av && <GeoJSON pane="pane-av" data={toFC(geo.av)} style={() => styleAV} />}
+                    {geo?.corte_av && <GeoJSON pane="pane-corte" data={toFC(geo.corte_av)} style={() => styleCorte} />}
+
+                    {/* Ruas */}
+                    {geo?.ruas_eixo && (
+                        <GeoJSON pane="pane-ruas" data={toFC(geo.ruas_eixo)} style={() => styleRuaEixo} onEachFeature={onEachWithPopup(ruaEixoPopup)} />
+                    )}
+                    {geo?.ruas_mask && (
+                        <GeoJSON pane="pane-ruas" data={toFC(geo.ruas_mask)} style={() => styleRuaMask} onEachFeature={onEachWithPopup(ruaMaskPopup)} />
                     )}
 
-                    {geo?.corte_av && (
-                        <GeoJSON pane="pane-corte" data={toFC(geo.corte_av)} style={() => styleCorte} />
-                    )}
-
-                    {geo?.ruas && (
-                        <GeoJSON pane="pane-ruas" data={toFC(geo.ruas)} style={() => styleRua} />
-                    )}
-
-                    {/* Se você quiser ver as FAIXAS/MÁSCARAS (polígonos) que salvamos */}
-                    {geo?.rua_mask && (
-                        <GeoJSON pane="pane-ruas" data={toFC(geo.rua_mask)} style={() => ({ ...styleRua, weight: 1, opacity: 0.7, fillOpacity: 0.25 })} />
+                    {/* Rios */}
+                    {geo?.rios_centerline && (
+                        <GeoJSON pane="pane-rios" data={toFC(geo.rios_centerline)} style={() => styleRiosCL} onEachFeature={onEachWithPopup(margemPopup("Rio (centerline)"))} />
                     )}
                     {geo?.rios_faixa && (
-                        <GeoJSON pane="pane-rios" data={toFC(geo.rios_faixa)} style={() => styleRiosFx} />
+                        <GeoJSON pane="pane-rios" data={toFC(geo.rios_faixa)} style={() => styleRiosFx} onEachFeature={onEachWithPopup(margemPopup("Rio (faixa)"))} />
+                    )}
+
+                    {/* LT */}
+                    {geo?.lt_centerline && (
+                        <GeoJSON pane="pane-lt" data={toFC(geo.lt_centerline)} style={() => styleLTCL} onEachFeature={onEachWithPopup(margemPopup("LT (centerline)"))} />
                     )}
                     {geo?.lt_faixa && (
-                        <GeoJSON pane="pane-lt" data={toFC(geo.lt_faixa)} style={() => styleLTFx} />
+                        <GeoJSON pane="pane-lt" data={toFC(geo.lt_faixa)} style={() => styleLTFx} onEachFeature={onEachWithPopup(margemPopup("LT (faixa)"))} />
+                    )}
+
+                    {/* Ferrovias */}
+                    {geo?.ferrovias_centerline && (
+                        <GeoJSON pane="pane-ferrovias" data={toFC(geo.ferrovias_centerline)} style={() => styleFerCL} onEachFeature={onEachWithPopup(margemPopup("Ferrovia (centerline)"))} />
                     )}
                     {geo?.ferrovias_faixa && (
-                        <GeoJSON pane="pane-ferrovias" data={toFC(geo.ferrovias_faixa)} style={() => styleFerFx} />
+                        <GeoJSON pane="pane-ferrovias" data={toFC(geo.ferrovias_faixa)} style={() => styleFerFx} onEachFeature={onEachWithPopup(margemPopup("Ferrovia (faixa)"))} />
                     )}
+
+                    {/* <<< FIT AQUI (depois dos layers) >>> */}
+                    <FitToData geo={geo} restricaoId={restricaoSel} />
                 </MapContainer>
             </div>
         </div>
