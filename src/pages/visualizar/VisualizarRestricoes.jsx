@@ -59,6 +59,52 @@ function TilesWithFallback() {
 }
 
 // ---------- Helpers FC/Bounds ----------
+
+// --- helpers de área (aprox. em m² via Web Mercator) ---
+const R = 6378137; // raio WGS84
+function lonLatToMercMeters([lon, lat]) {
+    const x = (lon * Math.PI / 180) * R;
+    const y = Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2)) * R;
+    return [x, y];
+}
+function ringAreaMeters2(ring) {
+    let area = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [xi, yi] = lonLatToMercMeters(ring[i]);
+        const [xj, yj] = lonLatToMercMeters(ring[j]);
+        area += (xj * yi - xi * yj);
+    }
+    return Math.abs(area) / 2;
+}
+function polygonAreaMeters2(coords) {
+    // coords: [ [linearRing1], [hole1], [hole2] ... ]
+    if (!coords || !coords.length) return 0;
+    let area = 0;
+    coords.forEach((ring, idx) => {
+        const a = ringAreaMeters2(ring);
+        area += (idx === 0 ? a : -a); // fura buracos
+    });
+    return Math.max(area, 0);
+}
+function multiPolygonAreaMeters2(mpolyCoords) {
+    if (!mpolyCoords || !mpolyCoords.length) return 0;
+    return mpolyCoords.reduce((sum, poly) => sum + polygonAreaMeters2(poly), 0);
+}
+function areaGeoJSONMeters2(geom) {
+    if (!geom) return 0;
+    if (geom.type === "Polygon") return polygonAreaMeters2(geom.coordinates);
+    if (geom.type === "MultiPolygon") return multiPolygonAreaMeters2(geom.coordinates);
+    return 0;
+}
+function fmtArea(m2) {
+    if (!m2) return { m2: "0", ha: "0", label: "0 m²" };
+    const ha = m2 / 10000;
+    const m2s = m2.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+    const has = ha.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+    return { m2: m2s, ha: has, label: `${m2s} m² (${has} ha)` };
+}
+
+
 function toFC(x) {
     if (!x) return { type: "FeatureCollection", features: [] };
     if (x.type === "FeatureCollection") return x;
@@ -170,6 +216,7 @@ function FitToData({ geo, restricaoId }) {
 
 // ---------- Página ----------
 export default function RestricoesViewer() {
+
     const axiosAuth = useAxios();
     const mapRef = useRef(null);
 
@@ -179,6 +226,45 @@ export default function RestricoesViewer() {
     const [restricaoSel, setRestricaoSel] = useState("");
 
     const [geo, setGeo] = useState(null);
+    // --- áreas AOI e Loteável (depois do useState de 'geo') ---
+
+    // FC da loteável (normaliza em FC)
+    const loteavelFC = useMemo(() => {
+        const fc = geo?.area_loteavel;
+        if (!fc) return { type: "FeatureCollection", features: [] };
+        return fc.type === "FeatureCollection" ? fc : { type: "FeatureCollection", features: [] };
+    }, [geo]);
+
+    // geometria simples da AOI (Polygon/MultiPolygon)
+    const aoiGeom = useMemo(() => (geo?.aoi || geo?.aoi_snapshot || null), [geo]);
+
+    // área da AOI (m²)
+    const aoiAreaM2 = useMemo(() => areaGeoJSONMeters2(aoiGeom), [aoiGeom]);
+
+    // área loteável (m²) — soma das features (usa properties.area_m2 se existir; senão calcula)
+    const loteavelAreaM2 = useMemo(() => {
+        const feats = loteavelFC?.features || [];
+        if (!feats.length) return 0;
+        return feats.reduce((acc, f) => {
+            const propA = Number(f?.properties?.area_m2);
+            const a = Number.isFinite(propA) && propA > 0 ? propA : areaGeoJSONMeters2(f?.geometry);
+            return acc + (Number.isFinite(a) ? a : 0);
+        }, 0);
+    }, [loteavelFC]);
+
+    const aoiFmt = useMemo(() => fmtArea(aoiAreaM2), [aoiAreaM2]);
+    const lotFmt = useMemo(() => fmtArea(loteavelAreaM2), [loteavelAreaM2]);
+
+    const pctLoteavel = useMemo(() => {
+        if (!aoiAreaM2) return "0,00%";
+        const p = (loteavelAreaM2 / aoiAreaM2) * 100;
+        return p.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + "%";
+    }, [aoiAreaM2, loteavelAreaM2]);
+
+
+    const styleLoteavel = { color: "#FFB300", weight: 2, opacity: 1, fillColor: "#FFD54F", fillOpacity: 0.22 };
+    const [showLoteavel, setShowLoteavel] = useState(true);
+
 
     // carregar projetos
     useEffect(() => {
@@ -268,6 +354,39 @@ export default function RestricoesViewer() {
                 </select>
             </div>
 
+            {/* QUADRO DE ÁREAS */}
+            <div className="absolute z-[1000] top-40 left-2 bg-white/35 backdrop-blur rounded-xl shadow p-3 min-w-[260px]">
+                <div className="font-semibold mb-2">Resumo de Áreas</div>
+                <div className="text-sm flex flex-col gap-1">
+                    <div className="flex justify-between">
+                        <span>AOI:</span>
+                        <span className="font-medium">{aoiFmt.label}</span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span>Área loteável:</span>
+                        <span className="font-medium">{lotFmt.label}</span>
+                    </div>
+                    <div className="h-px my-2 bg-gray-200" />
+                    <div className="flex justify-between">
+                        <span>% loteável na AOI:</span>
+                        <span className="font-medium">{pctLoteavel}</span>
+                    </div>
+
+                    {/* Toggle dentro do mesmo card, se preferir */}
+                    <label htmlFor="toggle-loteavel" className="mt-3 flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                            id="toggle-loteavel"
+                            type="checkbox"
+                            checked={!!showLoteavel}
+                            onChange={(e) => setShowLoteavel(e.target.checked)}
+                        />
+                        Mostrar área loteável
+                    </label>
+                </div>
+            </div>
+
+
+
             {/* MAPA */}
             <div style={{ height: "100vh", width: "100%" }}>
                 <MapContainer
@@ -283,6 +402,7 @@ export default function RestricoesViewer() {
 
                     {/* Panes */}
                     <Pane name="pane-aoi" style={{ zIndex: 520 }} />
+                    <Pane name="pane-loteavel" style={{ zIndex: 597 }} />
                     <Pane name="pane-av" style={{ zIndex: 580 }} />
                     <Pane name="pane-corte" style={{ zIndex: 585 }} />
                     <Pane name="pane-ruas" style={{ zIndex: 590 }} />
@@ -327,6 +447,10 @@ export default function RestricoesViewer() {
                     )}
                     {geo?.ferrovias_faixa && (
                         <GeoJSON pane="pane-ferrovias" data={toFC(geo.ferrovias_faixa)} style={() => styleFerFx} onEachFeature={onEachWithPopup(margemPopup("Ferrovia (faixa)"))} />
+                    )}
+
+                    {showLoteavel && loteavelFC?.features?.length > 0 && (
+                        <GeoJSON pane="pane-loteavel" data={loteavelFC} style={() => styleLoteavel} />
                     )}
 
                     {/* <<< FIT AQUI (depois dos layers) >>> */}
