@@ -827,13 +827,8 @@ export default function GeomanLoteador() {
                 adHoc: buildAdHocRestricoes(),   // <- usa sua função existente
             };
 
-            console.log("[restricoes][payload]", JSON.stringify(payload.adHoc.aoi, null, 2));
-            console.log("[restricoes][rios sample]", payload.adHoc.rios?.features?.[0]);
-            console.log("[restricoes][ruas sample]", payload.adHoc.ruas?.features?.[0]);
-
 
             const { data } = await axiosAuth.post(`/projetos/${projetoSel}/restricoes/`, payload);
-            console.log("[restrições criada]", data);
             alert(`Versão salva: v${data.version}`);
 
         } catch (e) {
