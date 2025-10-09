@@ -35,6 +35,9 @@ import {
 const token = import.meta.env.VITE_MAPBOX_TOKEN?.trim();
 const DEBUG = true;
 
+const newUid = () => (crypto?.randomUUID?.() || `m-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+
 function TilesWithFallback() {
     const hasToken = !!token;
     return (
@@ -110,10 +113,11 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
 
     useEffect(() => {
         if (!controlsReadyRef.current) {
+            // Controles Geoman
             map.pm.addControls({
                 position: "topleft",
                 drawMarker: false,
-                drawCircle: false,
+                drawCircle: true,
                 drawCircleMarker: false,
                 drawText: false,
                 drawPolyline: true,
@@ -137,17 +141,89 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
         }
 
         const handleCreate = (e) => {
-            try { e.layer.options.pmIgnore = true; } catch { }
-            const gj = e.layer.toGeoJSON();
-            try {
-                onCreateFeature(drawMode, gj, map, e.layer);
-            } catch (err) {
-                console.error("[onCreateFeature] EXCEPTION:", err);
-            } finally {
-                if (drawMode !== "areaVerde" && drawMode !== "corteLayer") {
-                    try { map.pm.disableDraw(); } catch { }
+            const layer = e.layer;
+            let createdOnce = false;
+
+            // Evita o Geoman mexer no sketch após criar
+            try { layer.options.pmIgnore = true; } catch { }
+
+            const callOnce = (mode, featLike) => {
+                if (createdOnce) return;
+                createdOnce = true;
+                try {
+                    onCreateFeature(mode, featLike, map, layer);
+                } catch (err) {
+                    console.error("[onCreateFeature] EXCEPTION:", err);
+                } finally {
+                    // Desliga o draw apenas para modos não-contínuos
+                    if (mode !== "areaVerde" && mode !== "corteLayer") {
+                        try { map.pm.disableDraw(); } catch { }
+                    }
+                    // Remove o sketch da camada de desenho
+                    safeRemoveDraftLayer(map, layer);
                 }
-                // Remoção segura do sketch
+            };
+
+            try {
+                const gj = layer.toGeoJSON();
+
+                // --- MANUAL POLYGON ---
+                if (drawMode === "manualPolygon") {
+                    const name = (window.__manualName || "").trim();
+                    if (!name) {
+                        alert("Informe um nome para a restrição.");
+                    } else if (!["Polygon", "MultiPolygon"].includes(gj.geometry?.type)) {
+                        alert("Geometria inválida para polígono manual.");
+                    } else {
+                        const feat = {
+                            type: "Feature",
+                            geometry: gj.geometry,
+                            properties: { name, role: "manual", _uid: newUid() },
+                        };
+                        callOnce(drawMode, feat);
+                    }
+                    try { window.__manualName = ""; } catch { }
+                    return; // já tratou
+                }
+
+                // --- MANUAL CIRCLE (gera Polygon via Turf) ---
+                if (drawMode === "manualCircle") {
+                    try {
+                        const name = (window.__manualName || "").trim();
+                        const radiusM = Number(window.__manualRadius || 0);
+                        if (!name || !(radiusM > 0)) {
+                            alert("Nome/raio inválido.");
+                        } else {
+                            const center = layer.getLatLng();
+                            const radiusKm = radiusM / 1000; // Turf usa quilômetros
+                            const circlePoly = turf.circle([center.lng, center.lat], radiusKm, {
+                                steps: 64,
+                                units: "kilometers",
+                                properties: {
+                                    name,
+                                    role: "manual",
+                                    type: "circle",
+                                    radius_m: radiusM,
+                                    _uid: newUid(),
+                                },
+                            });
+                            callOnce(drawMode, circlePoly);
+                        }
+                    } catch (err) {
+                        console.error("Erro ao gerar polígono do círculo:", err);
+                        alert("Não foi possível gerar o polígono do círculo.");
+                    } finally {
+                        try { window.__manualName = ""; window.__manualRadius = undefined; } catch { }
+                    }
+                    return; // já tratou
+                }
+
+                // --- DEMAIS MODOS (rua, areaVerde, corte etc.) ---
+                callOnce(drawMode, gj);
+            } catch (err) {
+                console.error("[MapEffects.handleCreate] erro:", err);
+                // fallback de limpeza
+                try { map.pm.disableDraw(); } catch { }
                 safeRemoveDraftLayer(map, e.layer);
             }
         };
@@ -158,19 +234,26 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
         };
     }, [map, onCreateFeature, drawMode, onMapReady]);
 
+    // Habilita/desabilita as ferramentas conforme o modo
     useEffect(() => {
         try { map.pm.disableDraw(); } catch { }
+
         if (drawMode === "areaVerde") {
             map.pm.enableDraw("Polygon", { snappable: true, snapDistance: 20, continueDrawing: true });
         } else if (drawMode === "corteLayer") {
             map.pm.enableDraw("Polygon", { snappable: true, snapDistance: 20, continueDrawing: true });
         } else if (drawMode === "rua") {
             map.pm.enableDraw("Line", { snappable: true, snapDistance: 20 });
+        } else if (drawMode === "manualPolygon") {
+            map.pm.enableDraw("Polygon", { snappable: true, snapDistance: 20 });
+        } else if (drawMode === "manualCircle") {
+            map.pm.enableDraw("Circle", { snappable: true, snapDistance: 20, finishOn: "dblclick" });
         }
     }, [map, drawMode, drawNonce]);
 
     return null;
 }
+
 
 function PmRealtimeRecalc({ getRecalc }) {
     const map = useMap();
@@ -214,6 +297,10 @@ function safePickAxiosError(err) {
 export default function GeomanLoteador() {
     const axiosAuth = useAxios();
     const mapRef = useRef(null);
+
+    // Restrições manuais (polígonos e círculos convertidos para Polygon)
+    const [restrManuais, setRestrManuais] = useState([]);
+    const manualStyle = { color: "#d97706", fillColor: "#fcd34d", fillOpacity: 0.3, weight: 2, opacity: 1 };
 
     const avLayerByUid = useRef(new Map());
     const corteLayerByUid = useRef(new Map());
@@ -406,6 +493,8 @@ export default function GeomanLoteador() {
         setMarginUiByOverlay({});
         setMarginGeoByOverlay({});
         setMarginVersionByOverlay({});
+
+        setRestrManuais([]);
 
         try {
             const { data: summary } = await axiosAuth.get(`projetos/${id}/map/summary/`);
@@ -696,6 +785,7 @@ export default function GeomanLoteador() {
 
     const buildAdHocRestricoes = (overlayMapOverride) => {
 
+
         const aoiGeom = aoi?.geometry || null;
         // 1) AV e Corte de AV
         const av = {
@@ -737,6 +827,18 @@ export default function GeomanLoteador() {
             lt: ["lt", "linhas", "transmiss", "energia", "eletric", "linha_de_transmissao"],
             ferrovias: ["ferrovia", "ferrov", "rail", "trem", "railway", "via_ferrea"],
         };
+
+        // 4) Restrições
+
+        const manuaisFC = {
+            type: "FeatureCollection",
+            features: (restrManuais || []).map((f) => ({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: { name: f?.properties?.name || "" }, // backend lê "name"/"nome"
+            })),
+        };
+
 
         const matchKind = (overlayId, kind) => {
             const id = String(overlayId || "").toLowerCase();
@@ -806,6 +908,7 @@ export default function GeomanLoteador() {
             rios,
             lt,
             ferrovias,
+            manuais: manuaisFC,
             default_rua_width: defaultRuaWidthNum,
             def_margem_rio: DEF_MARGEM_RIO,
             def_margem_lt: DEF_MARGEM_LT,
@@ -824,9 +927,11 @@ export default function GeomanLoteador() {
                 notes: "gerado no Geoman",
                 percent_permitido: Number(percentPermitido || 0),
                 source: "geoman",
-                adHoc: buildAdHocRestricoes(),   // <- usa sua função existente
+                adHoc: buildAdHocRestricoes(),
             };
+            console.log("[DEBUG payload]", payload);
 
+            console.log("manuais features:", payload?.adHoc?.manuais?.features?.length);
 
             const { data } = await axiosAuth.post(`/projetos/${projetoSel}/restricoes/`, payload);
             alert(`Versão salva: v${data.version}`);
@@ -880,6 +985,40 @@ export default function GeomanLoteador() {
                     >
                         Área Verde
                     </button>
+                    <div className="flex items-center gap-2 flex-wrap mt-2">
+                        <button
+                            onClick={() => {
+                                const nm = window.prompt("Nome da restrição (polígono):") || "";
+                                if (!nm.trim()) { alert("Informe um nome."); return; }
+                                window.__manualName = nm.trim(); // cache rápido
+                                setDrawMode("manualPolygon");
+                                setDrawNonce((n) => n + 1);
+                            }}
+                            className="px-3 py-2 rounded bg-amber-700 text-white"
+                            title="Desenhar polígono manual (com nome)"
+                        >
+                            Polígono Manual
+                        </button>
+
+                        <button
+                            onClick={() => {
+                                const nm = window.prompt("Nome da restrição (círculo):") || "";
+                                if (!nm.trim()) { alert("Informe um nome."); return; }
+                                const raioStr = window.prompt("Raio do círculo (em metros):") || "";
+                                const raio = parseFloat(raioStr);
+                                if (!Number.isFinite(raio) || raio <= 0) { alert("Raio inválido."); return; }
+                                window.__manualName = nm.trim();
+                                window.__manualRadius = raio;
+                                setDrawMode("manualCircle");
+                                setDrawNonce((n) => n + 1);
+                            }}
+                            className="px-3 py-2 rounded bg-amber-800 text-white"
+                            title="Desenhar círculo manual (o usuário clica o centro no mapa)"
+                        >
+                            Círculo Manual (raio m)
+                        </button>
+                    </div>
+
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1135,6 +1274,18 @@ export default function GeomanLoteador() {
                                     }
                                 }
                             }
+                            if (mode === "manualPolygon" || mode === "manualCircle") {
+                                const f = {
+                                    type: "Feature",
+                                    geometry: gj.geometry, // no circle, já vem como Polygon
+                                    properties: { ...(gj.properties || {}), role: "manual" },
+                                };
+                                if (!f.properties._uid) f.properties._uid = newUid();
+                                setRestrManuais((prev) => [...prev, f]);
+                                return;
+                            }
+
+
                         }}
                     />
 
@@ -1319,6 +1470,72 @@ export default function GeomanLoteador() {
                             />
                         ) : null
                     )}
+
+                    {/* Restrições Manuais (polígonos/“círculos” convertidos) */}
+                    {restrManuais.map((m, i) => (
+                        <GeoJSON
+                            pane="pane-restricoes"
+                            key={`manual-${m?.properties?._uid ?? i}`}
+                            data={m}
+                            style={() => manualStyle}
+                            onEachFeature={(feature, layer) => {
+                                try {
+                                    const uid = m?.properties?._uid ?? i;
+
+                                    // habilita edição Geoman
+                                    layer.once("add", () => {
+                                        setTimeout(() => {
+                                            try {
+                                                layer.pm?.enable?.({
+                                                    allowSelfIntersection: false,
+                                                    snappable: true,
+                                                    snapDistance: 20,
+                                                });
+                                                layer.options.pmIgnore = false;
+                                                layer.bringToFront?.();
+                                            } catch { }
+                                        }, 0);
+                                    });
+
+                                    // sincroniza geometria de volta ao estado ao terminar edição/drag
+                                    const syncEnd = () => {
+                                        const gjUpd = layer.toGeoJSON();
+                                        setRestrManuais((prev) =>
+                                            prev.map((it) =>
+                                                (it?.properties?._uid ?? null) === uid
+                                                    ? { ...it, geometry: gjUpd.geometry }
+                                                    : it
+                                            )
+                                        );
+                                    };
+                                    layer.on("pm:markerdragend", syncEnd);
+                                    layer.on("pm:editend", syncEnd);
+                                    layer.on("pm:dragend", syncEnd);
+
+                                    // remover
+                                    layer.on("pm:remove", () => {
+                                        setRestrManuais((prev) => prev.filter((it) => (it?.properties?._uid ?? null) !== uid));
+                                    });
+
+                                    // clique para renomear (opcional)
+                                    layer.on("click", (ev) => {
+                                        if (!ev.originalEvent?.shiftKey) return; // por exemplo: use Shift+Click para evitar conflito com edição
+                                        const curr = (m?.properties?.name || "");
+                                        const nm = window.prompt("Renomear restrição:", curr);
+                                        if (nm == null) return;
+                                        setRestrManuais((prev) =>
+                                            prev.map((it) =>
+                                                (it?.properties?._uid ?? null) === uid
+                                                    ? { ...it, properties: { ...it.properties, name: nm.trim() } }
+                                                    : it
+                                            )
+                                        );
+                                    });
+                                } catch { }
+                            }}
+                        />
+                    ))}
+
                 </MapContainer>
             </div>
         </div>
