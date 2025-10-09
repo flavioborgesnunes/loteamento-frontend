@@ -1,9 +1,12 @@
-// src/pages/geoman/RestricoesViewer.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, LayersControl, GeoJSON, Pane, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import useAxios from "../../utils/useAxios";
+
+// >>> NOVOS IMPORTS (parcelamento)
+import ParcelamentoPanel from "../parcelamento/ParcelamentoPanel";
+import useParcelamentoApi from "../parcelamento/parcelamento";
 
 // ---------- Tiles ----------
 const token = import.meta.env.VITE_MAPBOX_TOKEN?.trim();
@@ -59,9 +62,8 @@ function TilesWithFallback() {
 }
 
 // ---------- Helpers FC/Bounds ----------
-
-// --- helpers de área (aprox. em m² via Web Mercator) ---
-const R = 6378137; // raio WGS84
+// (mesmos helpers que você já tinha)
+const R = 6378137;
 function lonLatToMercMeters([lon, lat]) {
     const x = (lon * Math.PI / 180) * R;
     const y = Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2)) * R;
@@ -77,12 +79,11 @@ function ringAreaMeters2(ring) {
     return Math.abs(area) / 2;
 }
 function polygonAreaMeters2(coords) {
-    // coords: [ [linearRing1], [hole1], [hole2] ... ]
     if (!coords || !coords.length) return 0;
     let area = 0;
     coords.forEach((ring, idx) => {
         const a = ringAreaMeters2(ring);
-        area += (idx === 0 ? a : -a); // fura buracos
+        area += (idx === 0 ? a : -a);
     });
     return Math.max(area, 0);
 }
@@ -103,8 +104,6 @@ function fmtArea(m2) {
     const has = ha.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
     return { m2: m2s, ha: has, label: `${m2s} m² (${has} ha)` };
 }
-
-
 function toFC(x) {
     if (!x) return { type: "FeatureCollection", features: [] };
     if (x.type === "FeatureCollection") return x;
@@ -126,12 +125,10 @@ function computeBoundsFromFCs(listOfFCs = []) {
     try { layer.remove?.(); } catch { }
     return b && b.isValid() ? b : null;
 }
-
 function buildFCsForFit(geo) {
     if (!geo) return { fcAOI: null, all: null };
     const aoiGeom = geo?.aoi || geo?.aoi_snapshot || null;
     const fcAOI = aoiGeom ? toFC({ type: "Feature", geometry: aoiGeom, properties: {} }) : null;
-
     const fcs = [
         toFC(geo?.av), toFC(geo?.corte_av),
         toFC(geo?.ruas_eixo), toFC(geo?.ruas_mask),
@@ -141,7 +138,6 @@ function buildFCsForFit(geo) {
     ];
     const all = { type: "FeatureCollection", features: [] };
     fcs.forEach((fc) => { if (fc?.features?.length) all.features.push(...fc.features); });
-
     return { fcAOI, all: isNonEmptyFC(all) ? all : null };
 }
 
@@ -157,6 +153,16 @@ const styleLTCL = { color: "#A84300", weight: 2, opacity: 1 };
 const styleLTFx = { color: "#A84300", weight: 2, opacity: 1, fillOpacity: 0.25 };
 const styleFerCL = { color: "#6D4C41", weight: 2, opacity: 1 };
 const styleFerFx = { color: "#6D4C41", weight: 2, opacity: 1, fillOpacity: 0.25 };
+const styleLoteavel = { color: "#FFB300", weight: 2, opacity: 1, fillColor: "#FFD54F", fillOpacity: 0.22 };
+
+// >>> Estilos do PARCELAMENTO (prévia e oficial)
+const styleViaPreview = { color: "#0ea5e9", weight: 3, opacity: 1 };         // ciano
+const styleQuartPreview = { color: "#0ea5e9", weight: 2, fillOpacity: 0.10 };
+const styleLotePreview = { color: "#0ea5e9", weight: 1, opacity: 0.9 };
+
+const styleViaOficial = { color: "#7c3aed", weight: 3, opacity: 1 };         // roxo
+const styleQuartOficial = { color: "#7c3aed", weight: 2, fillOpacity: 0.10 };
+const styleLoteOficial = { color: "#7c3aed", weight: 1, opacity: 0.9 };
 
 // ---------- Popups ----------
 const onEachWithPopup = (getHtml) => (feature, layer) => {
@@ -174,22 +180,13 @@ function FitToData({ geo, restricaoId }) {
 
     useEffect(() => {
         if (!map || !geo || !restricaoId) return;
-
-        // evita refit desnecessário para a mesma versão
         if (fittedRef.current === restricaoId) return;
-
         const { fcAOI, all } = buildFCsForFit(geo);
-
-        // 1) tenta AOI
         let bounds = computeBoundsFromFCs(fcAOI ? [fcAOI] : []);
-        // 2) fallback: tudo
         if (!bounds) bounds = computeBoundsFromFCs(all ? [all] : []);
-
         if (bounds) {
             try { map.invalidateSize(false); } catch { }
             try { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 }); } catch { }
-
-            // reforços contra race com render de tiles/layers
             requestAnimationFrame(() => {
                 try { map.invalidateSize(false); } catch { }
                 try { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 }); } catch { }
@@ -198,12 +195,10 @@ function FitToData({ geo, restricaoId }) {
                 try { map.invalidateSize(false); } catch { }
                 try { map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 }); } catch { }
             }, 120);
-
             fittedRef.current = restricaoId;
         }
     }, [map, geo, restricaoId]);
 
-    // refita se tiles carregarem depois
     useEffect(() => {
         if (!map) return;
         const onResize = () => { try { map.invalidateSize(false); } catch { } };
@@ -216,8 +211,9 @@ function FitToData({ geo, restricaoId }) {
 
 // ---------- Página ----------
 export default function RestricoesViewer() {
-
     const axiosAuth = useAxios();
+    const { getOrCreatePlanoForProject, getVersaoGeojson } = useParcelamentoApi();
+
     const mapRef = useRef(null);
 
     const [projetos, setProjetos] = useState([]);
@@ -226,7 +222,11 @@ export default function RestricoesViewer() {
     const [restricaoSel, setRestricaoSel] = useState("");
 
     const [geo, setGeo] = useState(null);
-    // --- áreas AOI e Loteável (depois do useState de 'geo') ---
+
+    // >>> estados do parcelamento
+    const [planoId, setPlanoId] = useState(null);
+    const [parcelPrev, setParcelPrev] = useState({ vias: null, quarteiroes: null, lotes: null });
+    const [parcelOficial, setParcelOficial] = useState({ vias: null, quarteiroes: null, lotes: null });
 
     // FC da loteável (normaliza em FC)
     const loteavelFC = useMemo(() => {
@@ -238,10 +238,8 @@ export default function RestricoesViewer() {
     // geometria simples da AOI (Polygon/MultiPolygon)
     const aoiGeom = useMemo(() => (geo?.aoi || geo?.aoi_snapshot || null), [geo]);
 
-    // área da AOI (m²)
+    // área AOI e loteável
     const aoiAreaM2 = useMemo(() => areaGeoJSONMeters2(aoiGeom), [aoiGeom]);
-
-    // área loteável (m²) — soma das features (usa properties.area_m2 se existir; senão calcula)
     const loteavelAreaM2 = useMemo(() => {
         const feats = loteavelFC?.features || [];
         if (!feats.length) return 0;
@@ -254,17 +252,13 @@ export default function RestricoesViewer() {
 
     const aoiFmt = useMemo(() => fmtArea(aoiAreaM2), [aoiAreaM2]);
     const lotFmt = useMemo(() => fmtArea(loteavelAreaM2), [loteavelAreaM2]);
-
     const pctLoteavel = useMemo(() => {
         if (!aoiAreaM2) return "0,00%";
         const p = (loteavelAreaM2 / aoiAreaM2) * 100;
         return p.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + "%";
     }, [aoiAreaM2, loteavelAreaM2]);
 
-
-    const styleLoteavel = { color: "#FFB300", weight: 2, opacity: 1, fillColor: "#FFD54F", fillOpacity: 0.22 };
     const [showLoteavel, setShowLoteavel] = useState(true);
-
 
     // carregar projetos
     useEffect(() => {
@@ -279,26 +273,33 @@ export default function RestricoesViewer() {
         })();
     }, []);
 
-    // ao mudar projeto: carrega versões
+    // ao mudar projeto: carrega restrições e cria/pega Plano de Parcelamento
     useEffect(() => {
         setVersoes([]);
         setRestricaoSel("");
         setGeo(null);
+        setPlanoId(null);
+        setParcelPrev({ vias: null, quarteiroes: null, lotes: null });
+        setParcelOficial({ vias: null, quarteiroes: null, lotes: null });
         if (!projetoSel) return;
         (async () => {
             try {
                 const { data } = await axiosAuth.get(`/projetos/${projetoSel}/restricoes/list/`);
                 setVersoes(data || []);
-                // opcional: auto-selecionar a mais recente:
-                // if (data?.length) setRestricaoSel(data[0].id);
             } catch (e) {
                 console.error("[listar versões] erro:", e?.message || e);
                 alert("Erro ao listar versões.");
             }
+            try {
+                const plano = await getOrCreatePlanoForProject(projetoSel);
+                setPlanoId(plano?.id || null);
+            } catch (e) {
+                console.error("[parcelamento] plano erro:", e?.message || e);
+            }
         })();
     }, [projetoSel]);
 
-    // abrir versão
+    // abrir versão de restrições
     useEffect(() => {
         setGeo(null);
         if (!restricaoSel) return;
@@ -321,6 +322,32 @@ export default function RestricoesViewer() {
         const g = geo?.aoi || geo?.aoi_snapshot;
         return g ? toFC({ type: "Feature", geometry: g, properties: {} }) : null;
     }, [geo]);
+
+    // --- handlers vindos do painel ---
+    const handlePreviewParcel = (preview) => {
+        // preview: { vias, quarteiroes, lotes, metrics }
+        setParcelPrev({
+            vias: preview?.vias || null,
+            quarteiroes: preview?.quarteiroes || null,
+            lotes: preview?.lotes || null,
+        });
+    };
+
+    const handleMaterializeParcel = async (versaoId) => {
+        // buscar geojson oficial da versão de parcelamento (vias/quarteirões/lotes) — se quiser
+        try {
+            const gj = await getVersaoGeojson(versaoId);
+            setParcelOficial({
+                vias: gj?.vias || null,
+                quarteiroes: gj?.quarteiroes || null,
+                lotes: gj?.lotes || null,
+            });
+            // limpa prévia após materializar
+            setParcelPrev({ vias: null, quarteiroes: null, lotes: null });
+        } catch (e) {
+            console.error("[parcelamento] getVersaoGeojson erro:", e?.message || e);
+        }
+    };
 
     return (
         <div className="w-full h-full relative">
@@ -371,8 +398,6 @@ export default function RestricoesViewer() {
                         <span>% loteável na AOI:</span>
                         <span className="font-medium">{pctLoteavel}</span>
                     </div>
-
-                    {/* Toggle dentro do mesmo card, se preferir */}
                     <label htmlFor="toggle-loteavel" className="mt-3 flex items-center gap-2 cursor-pointer select-none">
                         <input
                             id="toggle-loteavel"
@@ -385,7 +410,17 @@ export default function RestricoesViewer() {
                 </div>
             </div>
 
-
+            {/* PAINEL DE PARCELAMENTO (lateral direita) */}
+            <div className="absolute z-[1000] top-2 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[360px]">
+                <h3 className="font-semibold mb-2">Parcelamento</h3>
+                <ParcelamentoPanel
+                    map={null}                 // Leaflet aqui: sem Draw (ok)
+                    planoId={planoId}
+                    alFeature={loteavelFC?.features?.[0] || (aoiGeom && { type: "Feature", geometry: aoiGeom, properties: {} })}
+                    onPreview={handlePreviewParcel}
+                    onMaterialize={handleMaterializeParcel}
+                />
+            </div>
 
             {/* MAPA */}
             <div style={{ height: "100vh", width: "100%" }}>
@@ -409,6 +444,9 @@ export default function RestricoesViewer() {
                     <Pane name="pane-rios" style={{ zIndex: 595 }} />
                     <Pane name="pane-lt" style={{ zIndex: 596 }} />
                     <Pane name="pane-ferrovias" style={{ zIndex: 597 }} />
+                    {/* Novos panes para parcelamento */}
+                    <Pane name="pane-parcel-prev" style={{ zIndex: 610 }} />
+                    <Pane name="pane-parcel-oficial" style={{ zIndex: 611 }} />
 
                     {/* AOI */}
                     {aoiFC && <GeoJSON pane="pane-aoi" data={aoiFC} style={() => styleAoi} />}
@@ -449,11 +487,22 @@ export default function RestricoesViewer() {
                         <GeoJSON pane="pane-ferrovias" data={toFC(geo.ferrovias_faixa)} style={() => styleFerFx} onEachFeature={onEachWithPopup(margemPopup("Ferrovia (faixa)"))} />
                     )}
 
+                    {/* Área loteável */}
                     {showLoteavel && loteavelFC?.features?.length > 0 && (
                         <GeoJSON pane="pane-loteavel" data={loteavelFC} style={() => styleLoteavel} />
                     )}
 
-                    {/* <<< FIT AQUI (depois dos layers) >>> */}
+                    {/* ===== PARCELAMENTO: PRÉVIA ===== */}
+                    {parcelPrev.vias && <GeoJSON pane="pane-parcel-prev" data={toFC(parcelPrev.vias)} style={() => styleViaPreview} />}
+                    {parcelPrev.quarteiroes && <GeoJSON pane="pane-parcel-prev" data={toFC(parcelPrev.quarteiroes)} style={() => styleQuartPreview} />}
+                    {parcelPrev.lotes && <GeoJSON pane="pane-parcel-prev" data={toFC(parcelPrev.lotes)} style={() => styleLotePreview} />}
+
+                    {/* ===== PARCELAMENTO: OFICIAL (materializado) ===== */}
+                    {parcelOficial.vias && <GeoJSON pane="pane-parcel-oficial" data={toFC(parcelOficial.vias)} style={() => styleViaOficial} />}
+                    {parcelOficial.quarteiroes && <GeoJSON pane="pane-parcel-oficial" data={toFC(parcelOficial.quarteiroes)} style={() => styleQuartOficial} />}
+                    {parcelOficial.lotes && <GeoJSON pane="pane-parcel-oficial" data={toFC(parcelOficial.lotes)} style={() => styleLoteOficial} />}
+
+                    {/* FIT */}
                     <FitToData geo={geo} restricaoId={restricaoSel} />
                 </MapContainer>
             </div>
