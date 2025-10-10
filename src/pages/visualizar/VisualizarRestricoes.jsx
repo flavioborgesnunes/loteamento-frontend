@@ -173,6 +173,35 @@ const ruaEixoPopup = (f) => (f?.properties?.width_m != null ? `<b>Rua</b><br/>la
 const ruaMaskPopup = (f) => (f?.properties?.width_m != null ? `<b>Máscara de Rua</b><br/>largura: ${Number(f.properties.width_m).toFixed(2)} m` : "<b>Máscara de Rua</b>");
 const margemPopup = (label) => (f) => (f?.properties?.margem_m != null ? `<b>${label}</b><br/>margem: ${Number(f.properties.margem_m).toFixed(2)} m` : `<b>${label}</b>`);
 
+
+// habilita edição Geoman nas vias da PRÉVIA
+function onEachViaPreview(feature, layer) {
+    // marca para conseguirmos buscar depois
+    try { layer.options._parcelTag = "vias"; } catch { }
+    try { layer.options.pane = "pane-parcel-prev"; } catch { }
+    // habilita edição (vértices, snap, etc.)
+    try {
+        if (layer.pm && typeof layer.pm.enable === "function") {
+            layer.pm.enable({
+                allowSelfIntersection: false,
+                snappable: true,
+                snapDistance: 20,
+            });
+        }
+    } catch { }
+}
+
+// NÃO editamos quarteirões/lotes (só leitura na prévia)
+function onEachNoEdit(feature, layer) {
+    try { layer.options._parcelTag = "noedit"; } catch { }
+    try {
+        if (layer.pm && typeof layer.pm.disable === "function") {
+            layer.pm.disable();
+        }
+    } catch { }
+}
+
+
 // ---------- Componente que faz o FIT (prioriza AOI) ----------
 function FitToData({ geo, restricaoId }) {
     const map = useMap();
@@ -208,6 +237,39 @@ function FitToData({ geo, restricaoId }) {
 
     return null;
 }
+
+function GeomanInit() {
+    const map = useMap();
+    useEffect(() => {
+        if (!map?.pm) return; // Geoman ainda não monkey-patched
+        // adiciona toolbar padrão à esquerda
+        map.pm.addControls({
+            position: "topleft",
+            drawMarker: false,
+            drawCircle: true,
+            drawCircleMarker: false,
+            drawText: false,
+            drawPolyline: true,
+            drawRectangle: false,
+            drawPolygon: true,
+            cutPolygon: true,
+            editMode: true,
+            dragMode: true,
+            rotateMode: false,
+            removalMode: true,
+        });
+        // opções globais
+        try {
+            map.pm.setGlobalOptions({
+                allowSelfIntersection: false,
+                snappable: true,
+                snapDistance: 20,
+            });
+        } catch { }
+    }, [map]);
+    return null;
+}
+
 
 // ---------- Página ----------
 export default function RestricoesViewer() {
@@ -259,6 +321,7 @@ export default function RestricoesViewer() {
     }, [aoiAreaM2, loteavelAreaM2]);
 
     const [showLoteavel, setShowLoteavel] = useState(true);
+    const [previewKey, setPreviewKey] = useState(0);
 
     // carregar projetos
     useEffect(() => {
@@ -331,6 +394,7 @@ export default function RestricoesViewer() {
             quarteiroes: preview?.quarteiroes || null,
             lotes: preview?.lotes || null,
         });
+        setPreviewKey((k) => k + 1);
     };
 
     const handleMaterializeParcel = async (versaoId) => {
@@ -414,12 +478,13 @@ export default function RestricoesViewer() {
             <div className="absolute z-[1000] top-2 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[360px]">
                 <h3 className="font-semibold mb-2">Parcelamento</h3>
                 <ParcelamentoPanel
-                    map={null}                 // Leaflet aqui: sem Draw (ok)
+                    map={mapRef.current}
                     planoId={planoId}
                     alFeature={loteavelFC?.features?.[0] || (aoiGeom && { type: "Feature", geometry: aoiGeom, properties: {} })}
                     onPreview={handlePreviewParcel}
                     onMaterialize={handleMaterializeParcel}
                 />
+
             </div>
 
             {/* MAPA */}
@@ -492,16 +557,43 @@ export default function RestricoesViewer() {
                         <GeoJSON pane="pane-loteavel" data={loteavelFC} style={() => styleLoteavel} />
                     )}
 
-                    {/* ===== PARCELAMENTO: PRÉVIA ===== */}
-                    {parcelPrev.vias && <GeoJSON pane="pane-parcel-prev" data={toFC(parcelPrev.vias)} style={() => styleViaPreview} />}
-                    {parcelPrev.quarteiroes && <GeoJSON pane="pane-parcel-prev" data={toFC(parcelPrev.quarteiroes)} style={() => styleQuartPreview} />}
-                    {parcelPrev.lotes && <GeoJSON pane="pane-parcel-prev" data={toFC(parcelPrev.lotes)} style={() => styleLotePreview} />}
+                    {/* ===== PARCELAMENTO: PRÉVIA (com edição e refresh) ===== */}
+                    {parcelPrev.vias && (
+                        <GeoJSON
+                            key={`vias-${previewKey}`}
+                            pane="pane-parcel-prev"
+                            data={toFC(parcelPrev.vias)}
+                            style={() => styleViaPreview}
+                            onEachFeature={onEachViaPreview}   // << habilita edição Geoman
+                        />
+                    )}
+                    {parcelPrev.quarteiroes && (
+                        <GeoJSON
+                            key={`quart-${previewKey}`}
+                            pane="pane-parcel-prev"
+                            data={toFC(parcelPrev.quarteiroes)}
+                            style={() => styleQuartPreview}
+                            onEachFeature={onEachNoEdit}       // << só visual
+                        />
+                    )}
+                    {parcelPrev.lotes && (
+                        <GeoJSON
+                            key={`lotes-${previewKey}`}
+                            pane="pane-parcel-prev"
+                            data={toFC(parcelPrev.lotes)}
+                            style={() => styleLotePreview}
+                            onEachFeature={onEachNoEdit}       // << só visual
+                        />
+                    )}
+
 
                     {/* ===== PARCELAMENTO: OFICIAL (materializado) ===== */}
                     {parcelOficial.vias && <GeoJSON pane="pane-parcel-oficial" data={toFC(parcelOficial.vias)} style={() => styleViaOficial} />}
                     {parcelOficial.quarteiroes && <GeoJSON pane="pane-parcel-oficial" data={toFC(parcelOficial.quarteiroes)} style={() => styleQuartOficial} />}
                     {parcelOficial.lotes && <GeoJSON pane="pane-parcel-oficial" data={toFC(parcelOficial.lotes)} style={() => styleLoteOficial} />}
 
+
+                    <GeomanInit />
                     {/* FIT */}
                     <FitToData geo={geo} restricaoId={restricaoSel} />
                 </MapContainer>

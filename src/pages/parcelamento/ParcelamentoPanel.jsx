@@ -2,13 +2,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import MapboxDraw from "@mapbox/mapbox-gl-draw";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
+import L from "leaflet";
+import "@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css";
+import "@geoman-io/leaflet-geoman-free";
+
 import useParcelamentoApi from "../parcelamento/parcelamento";
 
-// IDs de fontes/camadas quando o Mapbox map for usado
+// IDs Mapbox (mantidos)
 const SRC_VIAS = "parcel_vias";
 const SRC_QUART = "parcel_quarts";
 const SRC_LOTES = "parcel_lotes";
-
 const LYR_VIAS = "parcel_vias_line";
 const LYR_QUART = "parcel_quarts_fill";
 const LYR_LOTES = "parcel_lotes_line";
@@ -16,7 +19,7 @@ const LYR_LOTES = "parcel_lotes_line";
 /**
  * ParcelamentoPanel
  * Props:
- *  - map?: MapboxGL.Map | null
+ *  - map: pode ser um MapboxGL.Map **ou** um Leaflet.Map (com Geoman)
  *  - planoId: number | null
  *  - alFeature: GeoJSON Feature
  *  - onPreview?: (data) => void
@@ -42,17 +45,18 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
 
     const [metrics, setMetrics] = useState(null);
     const [versaoId, setVersaoId] = useState(null);
-
-    // estados de carregamento
     const [isPreviewing, setIsPreviewing] = useState(false);
     const [isMaterializing, setIsMaterializing] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
 
-    // Mapbox-Draw opcional
-    const drawRef = useRef(null);
+    // ===== detecção do tipo de mapa =====
+    const isLeaflet = !!(map && map.pm);          // Geoman presente
+    const isMapbox = !!(map && map.getSource);   // API Mapbox GL
 
+    // ======== MAPBOX-DRAW (mantido) ========
+    const drawRef = useRef(null);
     useEffect(() => {
-        if (!map || drawRef.current) return;
+        if (!isMapbox || drawRef.current) return;
         try {
             const draw = new MapboxDraw({
                 displayControlsDefault: false,
@@ -64,56 +68,120 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         } catch (e) {
             console.warn("[ParcelamentoPanel] MapboxDraw não pôde ser inicializado:", e?.message || e);
         }
-    }, [map]);
+    }, [isMapbox, map]);
 
-    // Helpers Mapbox
     const upsertSource = (id, data) => {
-        if (!map) return;
+        if (!isMapbox) return;
         const src = map.getSource(id);
         if (src) src.setData(data);
         else map.addSource(id, { type: "geojson", data });
     };
-
     const ensureLayers = () => {
-        if (!map) return;
-        if (!map.getLayer(LYR_VIAS)) {
-            map.addLayer({ id: LYR_VIAS, type: "line", source: SRC_VIAS, paint: { "line-width": 3 } });
-        }
-        if (!map.getLayer(LYR_QUART)) {
-            map.addLayer({ id: LYR_QUART, type: "fill", source: SRC_QUART, paint: { "fill-opacity": 0.25 } });
-        }
-        if (!map.getLayer(LYR_LOTES)) {
-            map.addLayer({ id: LYR_LOTES, type: "line", source: SRC_LOTES, paint: { "line-width": 1 } });
-        }
+        if (!isMapbox) return;
+        if (!map.getLayer(LYR_VIAS)) map.addLayer({ id: LYR_VIAS, type: "line", source: SRC_VIAS, paint: { "line-width": 3, "line-color": "#0ea5e9" } });
+        if (!map.getLayer(LYR_QUART)) map.addLayer({ id: LYR_QUART, type: "fill", source: SRC_QUART, paint: { "fill-opacity": 0.25, "fill-color": "#0ea5e9" } });
+        if (!map.getLayer(LYR_LOTES)) map.addLayer({ id: LYR_LOTES, type: "line", source: SRC_LOTES, paint: { "line-width": 1, "line-color": "#0ea5e9" } });
     };
 
-    const loadPreview = async () => {
-        if (!planoId) {
-            alert("Selecione um projeto para criar/obter um Plano de Parcelamento.");
-            return;
-        }
-        if (!alFeature?.geometry) {
-            alert("Área Loteável/AOI não encontrada.");
-            return;
+    // ======== LEAFLET-GEOMAN (acrescentado) ========
+    // grupos de layers para PRÉVIA (editáveis)
+    const viasGroupRef = useRef(null);
+    const quartGroupRef = useRef(null);
+    const lotesGroupRef = useRef(null);
+
+    useEffect(() => {
+        if (!isLeaflet) return;
+        const lf = map;
+
+        // cria groups 1x
+        if (!viasGroupRef.current) {
+            viasGroupRef.current = L.layerGroup().addTo(lf);
+            quartGroupRef.current = L.layerGroup().addTo(lf);
+            lotesGroupRef.current = L.layerGroup().addTo(lf);
         }
 
-        const alGeom = alFeature.geometry;
+        // opções globais “boas” de edição
+        lf.pm.setGlobalOptions({
+            snappable: true,
+            snapDistance: 30,
+            allowSelfIntersection: false,
+        });
+
+        // ao criar manualmente novas linhas no mapa
+        const onCreate = (e) => {
+            // se o usuário desenhar uma linha, coloca no grupo de vias
+            if (e.layer && e.layer instanceof L.Polyline) {
+                e.layer.setStyle({ color: "#0ea5e9", weight: 3 });
+                e.layer.addTo(viasGroupRef.current);
+                try { e.layer.pm.enable({ snappable: true }); } catch { }
+            }
+        };
+        lf.on("pm:create", onCreate);
+
+        return () => { try { lf.off("pm:create", onCreate); } catch { } };
+    }, [isLeaflet, map]);
+
+    const clearPreviewLeaflet = () => {
+        [viasGroupRef, quartGroupRef, lotesGroupRef].forEach(ref => {
+            if (ref.current) ref.current.clearLayers();
+        });
+    };
+    const addGeoJSONEditable = (groupRef, gj, style) => {
+        if (!isLeaflet || !gj || !groupRef.current) return 0;
+        const layer = L.geoJSON(gj, {
+            style: () => style,
+            onEachFeature: (f, l) => {
+                if (l.pm) { try { l.pm.enable({ snappable: true }); } catch { } }
+            }
+        }).addTo(groupRef.current);
+        return layer.getLayers().length;
+    };
+    const collectViasAsGeoJSON = () => {
+        if (!isLeaflet || !viasGroupRef.current) return { type: "FeatureCollection", features: [] };
+        const fc = { type: "FeatureCollection", features: [] };
+        viasGroupRef.current.eachLayer((l) => {
+            if (l.toGeoJSON) {
+                const f = l.toGeoJSON();
+                if (f?.geometry?.type === "LineString") fc.features.push(f);
+            }
+        });
+        return fc;
+    };
+
+    // ======== AÇÕES ========
+    const loadPreview = async () => {
+        if (!planoId) { alert("Selecione um projeto para criar/obter um Plano de Parcelamento."); return; }
+        if (!alFeature?.geometry) { alert("Área Loteável/AOI não encontrada."); return; }
+
         setIsPreviewing(true);
         try {
-            const data = await previewParcelamento(planoId, { alGeom, params });
+            const data = await previewParcelamento(planoId, { alGeom: alFeature.geometry, params });
             setMetrics(data?.metrics || null);
 
-            if (map) {
-                upsertSource(SRC_VIAS, data.vias);
-                upsertSource(SRC_QUART, data.quarteiroes);
-                upsertSource(SRC_LOTES, data.lotes);
+            if (isMapbox) {
+                upsertSource(SRC_VIAS, data?.vias || { type: "FeatureCollection", features: [] });
+                upsertSource(SRC_QUART, data?.quarteiroes || { type: "FeatureCollection", features: [] });
+                upsertSource(SRC_LOTES, data?.lotes || { type: "FeatureCollection", features: [] });
                 ensureLayers();
                 if (drawRef.current) {
                     try {
                         drawRef.current.deleteAll();
-                        (data?.vias?.features || []).forEach((f) => drawRef.current.add(f));
+                        (data?.vias?.features || []).forEach((f) => { if (f.geometry?.type === "LineString") drawRef.current.add(f); });
                     } catch { }
                 }
+            }
+
+            if (isLeaflet) {
+                clearPreviewLeaflet();
+                const nVias = addGeoJSONEditable(viasGroupRef, data?.vias, { color: "#0ea5e9", weight: 3 });
+                addGeoJSONEditable(quartGroupRef, data?.quarteiroes, { color: "#0ea5e9", weight: 2, fillOpacity: 0.10 });
+                addGeoJSONEditable(lotesGroupRef, data?.lotes, { color: "#0ea5e9", weight: 1 });
+
+                // habilita edição global dos objetos da prévia (handles visíveis)
+                try { map.pm.enableGlobalEditMode(); } catch { }
+
+                // se não veio via alguma, já ativa modo de desenhar linha
+                if (!nVias) { try { map.pm.enableDraw("Line", { snappable: true }); } catch { } }
             }
 
             onPreview?.(data);
@@ -126,29 +194,50 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
     };
 
     const handleMaterializar = async () => {
-        if (!planoId) {
-            alert("Plano de Parcelamento não definido.");
-            return;
-        }
-        if (!alFeature?.geometry) {
-            alert("Área Loteável/AOI não encontrada.");
-            return;
-        }
+        if (!planoId) { alert("Plano de Parcelamento não definido."); return; }
+        if (!alFeature?.geometry) { alert("Área Loteável/AOI não encontrada."); return; }
 
-        const alGeom = alFeature.geometry;
-
+        // coleta edições de VIAS no Leaflet Geoman (camadas da PRÉVIA)
         let userEdits = {};
-        if (drawRef.current) {
+        if (map && map.eachLayer && map.pm) {
+            try {
+                const features = [];
+                map.eachLayer((l) => {
+                    // buscamos as linhas criadas pelo GeoJSON da PRÉVIA
+                    const isPreviewPane = l?.options?.pane === "pane-parcel-prev";
+                    const isVia = l?.options?._parcelTag === "vias";
+                    const isLine = typeof l?.toGeoJSON === "function" && l?.toGeoJSON()?.geometry?.type?.includes("Line");
+                    if (isPreviewPane && isVia && isLine) {
+                        const gj = l.toGeoJSON();
+                        if (gj?.type === "Feature") {
+                            features.push(gj);
+                        } else if (gj) {
+                            features.push({ type: "Feature", geometry: gj.geometry || gj, properties: gj.properties || {} });
+                        }
+                    }
+                });
+                if (features.length) {
+                    userEdits.vias = { type: "FeatureCollection", features };
+                }
+            } catch (e) {
+                console.warn("[Leaflet Geoman] falha ao coletar edições:", e?.message || e);
+            }
+        }
+
+        // (mantém a coleta do Mapbox-Draw como fallback)
+        if (drawRef.current && !userEdits.vias) {
             try {
                 const edited = drawRef.current.getAll();
                 if (edited?.features?.length) userEdits.vias = edited;
             } catch { }
         }
 
+
+
         setIsMaterializing(true);
         try {
             const res = await materializarParcelamento(planoId, {
-                alGeom,
+                alGeom: alFeature.geometry,
                 params,
                 userEdits,
                 isOficial: true,
@@ -156,21 +245,19 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
             });
 
             const vId = res?.versao_id;
-            if (!vId) {
-                alert("Materialização não retornou versao_id.");
-                return;
-            }
+            if (!vId) { alert("Materialização não retornou versao_id."); return; }
 
             setVersaoId(vId);
             onMaterialize?.(vId);
 
-            if (map) {
+            if (isMapbox) {
                 const gj = await getVersaoGeojson(vId);
-                upsertSource(SRC_VIAS, gj.vias);
-                upsertSource(SRC_QUART, gj.quarteiroes);
-                upsertSource(SRC_LOTES, gj.lotes);
+                upsertSource(SRC_VIAS, gj.vias || { type: "FeatureCollection", features: [] });
+                upsertSource(SRC_QUART, gj.quarteiroes || { type: "FeatureCollection", features: [] });
+                upsertSource(SRC_LOTES, gj.lotes || { type: "FeatureCollection", features: [] });
                 ensureLayers();
             }
+            // No Leaflet, quem pinta o oficial é seu viewer (já está pronto)
         } catch (e) {
             console.error("[materializar parcelamento] erro:", e?.response?.data || e?.message || e);
             alert("Erro ao materializar. Veja o console.");
@@ -180,10 +267,7 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
     };
 
     const handleExportKML = async () => {
-        if (!versaoId) {
-            alert("Materialize primeiro para gerar KML.");
-            return;
-        }
+        if (!versaoId) { alert("Materialize primeiro para gerar KML."); return; }
         setIsExporting(true);
         try {
             const res = await exportVersaoKML(versaoId);
@@ -196,7 +280,6 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         }
     };
 
-    // rótulos com carregando
     const labelPreview = isPreviewing ? "⏳ Pré-visualizando..." : "Pré-visualizar";
     const labelMaterial = isMaterializing ? "⏳ Materializando..." : "Materializar";
     const labelExport = isExporting ? "⏳ Exportando KML..." : "Exportar KML";
@@ -205,88 +288,47 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         <div className="p-3 space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                 <label>Frente mínima (m)
-                    <input
-                        type="number"
-                        className="input"
-                        value={params.frente_min_m}
-                        onChange={(e) => setParams((p) => ({ ...p, frente_min_m: parseFloat(e.target.value) }))}
-                    />
+                    <input type="number" className="input" value={params.frente_min_m}
+                        onChange={(e) => setParams(p => ({ ...p, frente_min_m: parseFloat(e.target.value) }))} />
                 </label>
-
                 <label>Profundidade mínima (m)
-                    <input
-                        type="number"
-                        className="input"
-                        value={params.prof_min_m}
-                        onChange={(e) => setParams((p) => ({ ...p, prof_min_m: parseFloat(e.target.value) }))}
-                    />
+                    <input type="number" className="input" value={params.prof_min_m}
+                        onChange={(e) => setParams(p => ({ ...p, prof_min_m: parseFloat(e.target.value) }))} />
                 </label>
-
                 <label>Larg. rua vertical (m)
-                    <input
-                        type="number"
-                        className="input"
-                        value={params.larg_rua_vert_m}
-                        onChange={(e) => setParams((p) => ({ ...p, larg_rua_vert_m: parseFloat(e.target.value) }))}
-                    />
+                    <input type="number" className="input" value={params.larg_rua_vert_m}
+                        onChange={(e) => setParams(p => ({ ...p, larg_rua_vert_m: parseFloat(e.target.value) }))} />
                 </label>
-
                 <label>Larg. rua horizontal (m)
-                    <input
-                        type="number"
-                        className="input"
-                        value={params.larg_rua_horiz_m}
-                        onChange={(e) => setParams((p) => ({ ...p, larg_rua_horiz_m: parseFloat(e.target.value) }))}
-                    />
+                    <input type="number" className="input" value={params.larg_rua_horiz_m}
+                        onChange={(e) => setParams(p => ({ ...p, larg_rua_horiz_m: parseFloat(e.target.value) }))} />
                 </label>
-
                 <label>Comp. máx quarteirão (m)
-                    <input
-                        type="number"
-                        className="input"
-                        value={params.compr_max_quarteirao_m}
-                        onChange={(e) => setParams((p) => ({ ...p, compr_max_quarteirao_m: parseFloat(e.target.value) }))}
-                    />
+                    <input type="number" className="input" value={params.compr_max_quarteirao_m}
+                        onChange={(e) => setParams(p => ({ ...p, compr_max_quarteirao_m: parseFloat(e.target.value) }))} />
                 </label>
-
                 <label>Orientação (°) (opcional)
-                    <input
-                        type="number"
-                        className="input"
-                        value={params.orientacao_graus ?? ""}
-                        onChange={(e) => {
-                            const val = e.target.value === "" ? null : parseFloat(e.target.value);
-                            setParams((p) => ({ ...p, orientacao_graus: val }));
-                        }}
-                    />
+                    <input type="number" className="input" value={params.orientacao_graus ?? ""}
+                        onChange={(e) => setParams(p => ({ ...p, orientacao_graus: (e.target.value === "" ? null : parseFloat(e.target.value)) }))} />
                 </label>
             </div>
 
             <div className="flex gap-2">
-                <button
-                    className="btn"
-                    onClick={loadPreview}
+                <button className="btn" onClick={loadPreview}
                     disabled={isPreviewing || isMaterializing || !planoId}
-                    title={!planoId ? "Selecione um projeto para obter o plano" : ""}
-                >
+                    title={!planoId ? "Selecione um projeto para obter o plano" : ""}>
                     {labelPreview}
                 </button>
 
-                <button
-                    className="btn"
-                    onClick={handleMaterializar}
+                <button className="btn" onClick={handleMaterializar}
                     disabled={isMaterializing || isPreviewing || !planoId}
-                    title={!planoId ? "Selecione um projeto para obter o plano" : ""}
-                >
+                    title={!planoId ? "Selecione um projeto para obter o plano" : ""}>
                     {labelMaterial}
                 </button>
 
-                <button
-                    className="btn"
-                    onClick={handleExportKML}
+                <button className="btn" onClick={handleExportKML}
                     disabled={isExporting || !versaoId}
-                    title={!versaoId ? "Materialize primeiro" : ""}
-                >
+                    title={!versaoId ? "Materialize primeiro" : ""}>
                     {labelExport}
                 </button>
             </div>
@@ -299,11 +341,6 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
                 </div>
             )}
 
-            {!map && (
-                <p className="text-xs opacity-70">
-                    Dica: edição na prévia (arrastar vias) exige um mapa Mapbox. No RestricoesViewer (Leaflet) a prévia é só visual.
-                </p>
-            )}
         </div>
     );
 }
