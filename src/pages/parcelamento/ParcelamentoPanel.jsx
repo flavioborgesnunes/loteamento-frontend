@@ -25,7 +25,7 @@ const LYR_LOTES = "parcel_lotes_line";
  *  - onPreview?: (data) => void
  *  - onMaterialize?: (versaoId) => void
  */
-export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPreview, onMaterialize }) {
+export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPreview, onMaterialize, extraParams = {} }) {
     const {
         previewParcelamento,
         materializarParcelamento,
@@ -155,7 +155,8 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
 
         setIsPreviewing(true);
         try {
-            const data = await previewParcelamento(planoId, { alGeom: alFeature.geometry, params });
+            const mergedParams = { ...params, ...(extraParams || {}) };
+            const data = await previewParcelamento(planoId, { alGeom: alFeature.geometry, params: mergedParams });
             setMetrics(data?.metrics || null);
 
             if (isMapbox) {
@@ -236,13 +237,15 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
 
         setIsMaterializing(true);
         try {
+            const mergedParams = { ...params, ...(extraParams || {}) };
             const res = await materializarParcelamento(planoId, {
                 alGeom: alFeature.geometry,
-                params,
+                params: mergedParams,
                 userEdits,
                 isOficial: true,
                 nota: "",
             });
+
 
             const vId = res?.versao_id;
             if (!vId) { alert("Materialização não retornou versao_id."); return; }
