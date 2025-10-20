@@ -1,7 +1,8 @@
+// src/pages/parcelamento/Parcelamento.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import useAxios from "../../utils/useAxios";
-import ParcelamentoPanel from "../parcelamento/ParcelamentoPanel";
-import useParcelamentoApi from "../parcelamento/parcelamento";
+import ParcelamentoPanel from "./ParcelamentoPanel";
+import useParcelamentoApi from "./parcelamento";
 
 import "ol/ol.css";
 import Map from "ol/Map";
@@ -14,14 +15,12 @@ import { Fill, Stroke, Style, Circle as CircleStyle, Text } from "ol/style";
 import { Point as OLPoint } from "ol/geom";
 import GeoJSON from "ol/format/GeoJSON";
 import { fromLonLat } from "ol/proj";
-import Overlay from "ol/Overlay";
 import { Modify, Snap, Select, Draw } from "ol/interaction";
 import Translate from "ol/interaction/Translate";
 import { click as clickSelectCondition, shiftKeyOnly, altKeyOnly } from "ol/events/condition";
 import { defaults as defaultControls, ScaleLine, FullScreen, MousePosition, Zoom, Rotate, Attribution } from "ol/control";
 import { createStringXY } from "ol/coordinate";
 import { getLength as sphereLength, getArea as sphereArea } from "ol/sphere";
-import { unByKey } from "ol/Observable";
 
 // ---------------- Helpers
 const gj = new GeoJSON();
@@ -44,6 +43,7 @@ function buildFCsForFit(geo) {
         toFC(geo?.rios_centerline), toFC(geo?.rios_faixa),
         toFC(geo?.lt_centerline), toFC(geo?.lt_faixa),
         toFC(geo?.ferrovias_centerline), toFC(geo?.ferrovias_faixa),
+        toFC(geo?.area_loteavel),
     ];
     const all = { type: "FeatureCollection", features: [] };
     fcs.forEach(fc => { if (fc?.features?.length) all.features.push(...fc.features); });
@@ -79,13 +79,24 @@ function extentFromLayers(layers) {
     });
     return extent;
 }
+function writeLayerAsFC(layer) {
+    if (!layer) return { type: "FeatureCollection", features: [] };
+    const feats = layer.getSource()?.getFeatures?.() || [];
+    if (!feats.length) return { type: "FeatureCollection", features: [] };
+    const fc = gj.writeFeaturesObject(feats, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+    return toFC(fc);
+}
+function collectFCFromLayer(layer) {
+    if (!layer) return { type: "FeatureCollection", features: [] };
+    const feats = layer.getSource()?.getFeatures?.() || [];
+    return gj.writeFeaturesObject(feats, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+}
 
 // ---------------- Estilos
 const styleAoi = new Style({ stroke: new Stroke({ color: "#2c7be5", width: 2 }), fill: new Fill({ color: "rgba(44,123,229,0.05)" }) });
 const styleAV = new Style({ stroke: new Stroke({ color: "#007a4d", width: 2 }), fill: new Fill({ color: "rgba(65,214,134,0.45)" }) });
 const styleCorte = new Style({ stroke: new Stroke({ color: "#e11d48", width: 2 }), fill: new Fill({ color: "rgba(252,165,165,0.35)" }) });
-const styleRuaEixo = new Style({ stroke: new Stroke({ color: "#333", width: 3 }) });
-const styleRuaMask = new Style({ stroke: new Stroke({ color: "#333", width: 1 }), fill: new Fill({ color: "rgba(51,51,51,0.25)" }) });
+const styleRuaMask = new Style({ stroke: new Stroke({ color: "#9ca3af", width: 1 }), fill: new Fill({ color: "rgba(156,163,175,0.8)" }) }); // EXISTENTES: cinza cheio
 const styleRiosCL = new Style({ stroke: new Stroke({ color: "#2E86AB", width: 2 }) });
 const styleRiosFx = new Style({ stroke: new Stroke({ color: "#2E86AB", width: 2 }), fill: new Fill({ color: "rgba(46,134,171,0.25)" }) });
 const styleLTCL = new Style({ stroke: new Stroke({ color: "#A84300", width: 2 }) });
@@ -94,20 +105,27 @@ const styleFerCL = new Style({ stroke: new Stroke({ color: "#6D4C41", width: 2 }
 const styleFerFx = new Style({ stroke: new Stroke({ color: "#6D4C41", width: 2 }), fill: new Fill({ color: "rgba(109,76,65,0.25)" }) });
 const styleLoteavel = new Style({ stroke: new Stroke({ color: "#FFB300", width: 2 }), fill: new Fill({ color: "rgba(255,213,79,0.22)" }) });
 
-const styleViaPreview = new Style({ stroke: new Stroke({ color: "#0ea5e9", width: 3 }) });
-const styleQuartPreview = new Style({ stroke: new Stroke({ color: "#0ea5e9", width: 2 }), fill: new Fill({ color: "rgba(14,165,233,0.10)" }) });
+// VIAS NOVAS (áreas/máscaras cinza)
+const styleViasArea = new Style({
+    stroke: new Stroke({ color: "#9ca3af", width: 1 }),
+    fill: new Fill({ color: "rgba(156,163,175,0.8)" }),
+});
 
-function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor = "rgba(255,255,255,0.9)" }) {
+// QUARTEIRÕES: borda azul
+const styleQuartBorda = new Style({ stroke: new Stroke({ color: "#0ea5e9", width: 2 }), fill: null });
+
+// LOTES: preenchido amarelo + labels (# e área)
+function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor = "rgba(255,255,255,0.95)" }) {
     const cache = new WeakMap();
     return (feature, resolution) => {
         const cached = cache.get(feature);
         if (cached && cached.__res === resolution) return cached.styles;
 
         const styles = [];
-        styles.push(new Style({ stroke: new Stroke({ color: strokeColor, width: 1 }), fill: new Fill({ color: fillColor }) }));
+        styles.push(new Style({ stroke: new Stroke({ color: strokeColor, width: 1.5 }), fill: new Fill({ color: fillColor }) }));
 
         const props = feature.getProperties?.() || {};
-        const lotNumber = props.lot_number;
+        const lotNumber = props.lot_number ?? props.lotNumber ?? props.id;
         const areaM2 = props.area_m2;
         const centerLonLat = props.label_center;
         const cornerLonLat = props.label_corner;
@@ -131,7 +149,7 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
             }));
         }
 
-        if (cornerLonLat && cornerLonLat.length === 2 && Number.isFinite(lotNumber)) {
+        if (cornerLonLat && cornerLonLat.length === 2 && lotNumber != null) {
             const corner3857 = fromLonLat(cornerLonLat);
             styles.push(new Style({
                 geometry: new OLPoint(corner3857),
@@ -150,32 +168,21 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
         return styles;
     };
 }
-
-const styleLotePreview = makeLoteStyle({
-    strokeColor: "#0ea5e9",
-    fillColor: "rgba(14,165,233,0.14)",
+const styleLoteFill = makeLoteStyle({
+    strokeColor: "#f59e0b",
+    fillColor: "rgba(255, 213, 79, 0.35)",
     textColor: "#0b132b",
     haloColor: "rgba(255,255,255,0.95)",
 });
-const styleViaOficial = new Style({ stroke: new Stroke({ color: "#7c3aed", width: 3 }) });
-const styleQuartOficial = new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: new Fill({ color: "rgba(124,58,237,0.10)" }) });
-const styleLoteOficial = makeLoteStyle({
-    strokeColor: "#7c3aed",
-    fillColor: "rgba(124,58,237,0.14)",
-    textColor: "#1f2937",
-    haloColor: "rgba(255,255,255,0.95)",
+
+// CALÇADAS: brancas inteiras
+const styleCalcada = new Style({
+    stroke: new Stroke({ color: "#e5e7eb", width: 1 }),
+    fill: new Fill({ color: "rgba(255,255,255,1)" }),
 });
 
-// FC writer para a camada GUIA
-function writeLayerAsFC(layer) {
-    if (!layer) return { type: "FeatureCollection", features: [] };
-    const feats = layer.getSource()?.getFeatures?.() || [];
-    if (!feats.length) return { type: "FeatureCollection", features: [] };
-    const fc = gj.writeFeaturesObject(feats, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
-    return toFC(fc);
-}
-
-export default function RestricoesViewerOL() {
+// ---------------- Component
+export default function Parcelamento() {
     const axiosAuth = useAxios();
     const { getOrCreatePlanoForProject, getVersaoGeojson } = useParcelamentoApi();
 
@@ -185,20 +192,30 @@ export default function RestricoesViewerOL() {
     const baseLayersRef = useRef({});
     const layersRef = useRef({
         aoi: null, loteavel: null, av: null, corte: null,
-        ruas_eixo: null, ruas_mask: null,
+        ruas_mask: null, // EXISTENTES (já vieram da restrição)
         rios_centerline: null, rios_faixa: null,
         lt_centerline: null, lt_faixa: null,
         ferrovias_centerline: null, ferrovias_faixa: null,
-        prev_vias: null, prev_quarteiroes: null, prev_lotes: null,
-        ofc_vias: null, ofc_quarteiroes: null, ofc_lotes: null,
-        guia: null, // <— linha-guia orientadora
+
+        // prévia
+        prev_vias_area: null,           // NOVO: áreas/máscaras cinza das vias criadas
+        prev_quarteiroes: null,
+        prev_lotes: null,
+        calcadas: null,
+
+        // oficiais
+        ofc_vias_area: null,            // NOVO: áreas/máscaras cinza derivadas dos eixos oficiais
+        ofc_quarteiroes: null,
+        ofc_lotes: null,
+
+        guia: null, // orientadora
     });
 
     const selectRef = useRef(null);
     const modifyRef = useRef(null);
     const translateRef = useRef(null);
     const snapRefs = useRef([]);
-    const drawGuideRef = useRef(null); // <— Draw da linha-guia
+    const drawGuideRef = useRef(null);
 
     const [projetos, setProjetos] = useState([]);
     const [projetoSel, setProjetoSel] = useState("");
@@ -207,9 +224,9 @@ export default function RestricoesViewerOL() {
     const [geo, setGeo] = useState(null);
 
     const [planoId, setPlanoId] = useState(null);
-    const [parcelOficial, setParcelOficial] = useState({ vias: null, quarteiroes: null, lotes: null });
+    const [parcelOficial, setParcelOficial] = useState({ vias_area: null, quarteiroes: null, lotes: null, calcadas: null });
 
-    const [editTarget, setEditTarget] = useState("none"); // none|aoi|av|corte|loteavel|rua_mask|guia
+    const [editTarget, setEditTarget] = useState("none"); // none|aoi|av|corte|loteavel|rua_mask|guia|quarteiroes|lotes|calcadas|vias_area
     const [measureMode, setMeasureMode] = useState("none"); // none|distance|area
 
     // ===== Medição helpers =====
@@ -250,13 +267,14 @@ export default function RestricoesViewerOL() {
         baseLayersRef.current = bases;
 
         const mkVec = (z, style) => new VectorLayer({ zIndex: z, source: new VectorSource(), style });
+
         const L = layersRef.current;
+        // dados base
         L.aoi = mkVec(520, styleAoi);
         L.loteavel = mkVec(597, styleLoteavel);
         L.av = mkVec(580, styleAV);
         L.corte = mkVec(585, styleCorte);
-        L.ruas_eixo = mkVec(590, styleRuaEixo);
-        L.ruas_mask = mkVec(590, styleRuaMask);
+        L.ruas_mask = mkVec(590, styleRuaMask); // EXISTENTES cheias
         L.rios_centerline = mkVec(595, styleRiosCL);
         L.rios_faixa = mkVec(595, styleRiosFx);
         L.lt_centerline = mkVec(596, styleLTCL);
@@ -264,25 +282,35 @@ export default function RestricoesViewerOL() {
         L.ferrovias_centerline = mkVec(597, styleFerCL);
         L.ferrovias_faixa = mkVec(597, styleFerFx);
 
-        L.prev_vias = mkVec(610, styleViaPreview);
-        L.prev_quarteiroes = mkVec(611, styleQuartPreview);
+        // prévias
+        L.prev_vias_area = mkVec(609, styleViasArea);     // NOVO: cinza cheio
+        L.prev_quarteiroes = mkVec(611, styleQuartBorda);
         L.prev_lotes = new VectorLayer({
             zIndex: 612,
             source: new VectorSource(),
-            style: styleLotePreview,
+            style: styleLoteFill,
             declutter: true,
             renderBuffer: 100,
         });
 
-        L.ofc_vias = mkVec(613, styleViaOficial);
-        L.ofc_quarteiroes = mkVec(614, styleQuartOficial);
+        // oficiais
+        L.ofc_vias_area = mkVec(613, styleViasArea);      // NOVO: cinza cheio
+        L.ofc_quarteiroes = mkVec(614, new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: null }));
         L.ofc_lotes = new VectorLayer({
             zIndex: 615,
             source: new VectorSource(),
-            style: styleLoteOficial,
+            style: makeLoteStyle({
+                strokeColor: "#7c3aed",
+                fillColor: "rgba(124,58,237,0.18)",
+                textColor: "#1f2937",
+                haloColor: "rgba(255,255,255,0.95)",
+            }),
             declutter: true,
             renderBuffer: 100,
         });
+
+        // calcadas
+        L.calcadas = mkVec(605, styleCalcada);
 
         // GUIA (editável/desenhável)
         L.guia = new VectorLayer({
@@ -302,18 +330,26 @@ export default function RestricoesViewerOL() {
             ]),
         });
 
+        // expose layers for other modules if needed
+        window.__layers = layersRef.current;
+
         // --- Interações recriáveis por modo ---
         const buildLayerFilter = (mode) => {
             const Lx = layersRef.current;
-            const allowPreview = (lyr) => lyr === Lx.prev_vias || lyr === Lx.prev_quarteiroes || lyr === Lx.prev_lotes;
-            if (mode === "none") return (lyr) => allowPreview(lyr) || lyr === Lx.guia;
-            if (mode === "aoi") return (lyr) => allowPreview(lyr) || lyr === Lx.aoi || lyr === Lx.guia;
-            if (mode === "av") return (lyr) => allowPreview(lyr) || lyr === Lx.av || lyr === Lx.guia;
-            if (mode === "corte") return (lyr) => allowPreview(lyr) || lyr === Lx.corte || lyr === Lx.guia;
-            if (mode === "loteavel") return (lyr) => allowPreview(lyr) || lyr === Lx.loteavel || lyr === Lx.guia;
+            const allowPreview = (lyr) =>
+                lyr === Lx.prev_vias_area || lyr === Lx.prev_quarteiroes || lyr === Lx.prev_lotes;
+            if (mode === "none") return (lyr) => allowPreview(lyr) || lyr === Lx.guia || lyr === Lx.ruas_mask;
+            if (mode === "aoi") return (lyr) => allowPreview(lyr) || lyr === Lx.aoi || lyr === Lx.guia || lyr === Lx.ruas_mask;
+            if (mode === "av") return (lyr) => allowPreview(lyr) || lyr === Lx.av || lyr === Lx.guia || lyr === Lx.ruas_mask;
+            if (mode === "corte") return (lyr) => allowPreview(lyr) || lyr === Lx.corte || lyr === Lx.guia || lyr === Lx.ruas_mask;
+            if (mode === "loteavel") return (lyr) => allowPreview(lyr) || lyr === Lx.loteavel || lyr === Lx.guia || lyr === Lx.ruas_mask;
             if (mode === "rua_mask") return (lyr) => allowPreview(lyr) || lyr === Lx.ruas_mask || lyr === Lx.guia;
             if (mode === "guia") return (lyr) => lyr === Lx.guia || allowPreview(lyr);
-            return (lyr) => allowPreview(lyr) || lyr === Lx.guia;
+            if (mode === "quarteiroes") return (lyr) => lyr === Lx.prev_quarteiroes;
+            if (mode === "lotes") return (lyr) => lyr === Lx.prev_lotes;
+            if (mode === "calcadas") return (lyr) => lyr === Lx.calcadas;
+            if (mode === "vias_area") return (lyr) => lyr === Lx.prev_vias_area || lyr === Lx.ofc_vias_area;
+            return (lyr) => allowPreview(lyr) || lyr === Lx.guia || lyr === Lx.ruas_mask;
         };
 
         const recreateInteractions = (mode) => {
@@ -323,7 +359,6 @@ export default function RestricoesViewerOL() {
             snapRefs.current.forEach((s) => mapRef.current.removeInteraction(s));
             snapRefs.current = [];
 
-            // interrompe draw da guia se ativo
             if (drawGuideRef.current) {
                 mapRef.current.removeInteraction(drawGuideRef.current);
                 drawGuideRef.current = null;
@@ -337,6 +372,15 @@ export default function RestricoesViewerOL() {
                 style: null,
             });
             mapRef.current.addInteraction(selectRef.current);
+
+            // "clicou → só ele editável"
+            selectRef.current.on("select", (evt) => {
+                const sel = selectRef.current.getFeatures();
+                if (evt.selected && evt.selected.length) {
+                    sel.clear();
+                    sel.push(evt.selected[evt.selected.length - 1]);
+                }
+            });
 
             modifyRef.current = new Modify({
                 features: selectRef.current.getFeatures(),
@@ -355,10 +399,10 @@ export default function RestricoesViewerOL() {
 
             const Lx = layersRef.current;
             [
-                Lx.prev_vias, Lx.prev_quarteiroes, Lx.prev_lotes, Lx.guia,
+                Lx.prev_vias_area, Lx.prev_quarteiroes, Lx.prev_lotes, Lx.guia,
                 Lx.aoi, Lx.av, Lx.corte, Lx.loteavel, Lx.ruas_mask,
                 Lx.rios_centerline, Lx.rios_faixa, Lx.lt_centerline, Lx.lt_faixa,
-                Lx.ferrovias_centerline, Lx.ferrovias_faixa,
+                Lx.ferrovias_centerline, Lx.ferrovias_faixa, Lx.calcadas, Lx.ofc_vias_area,
             ].forEach((lyr) => {
                 if (!lyr) return;
                 const s = new Snap({ source: lyr.getSource() });
@@ -395,14 +439,12 @@ export default function RestricoesViewerOL() {
 
     // alterna base
     const [baseSel, setBaseSel] = useState(token ? "mapbox-hibrido" : "esri");
-
     useEffect(() => {
         const bases = baseLayersRef.current;
         Object.entries(bases).forEach(([k, lyr]) => {
             lyr.setVisible(k === baseSel);
         });
     }, [baseSel]);
-
 
     // muda o modo de edição → recria interações
     useEffect(() => {
@@ -425,7 +467,7 @@ export default function RestricoesViewerOL() {
     // ao mudar projeto
     useEffect(() => {
         setVersoes([]); setRestricaoSel(""); setGeo(null); setPlanoId(null);
-        setParcelOficial({ vias: null, quarteiroes: null, lotes: null });
+        setParcelOficial({ vias_area: null, quarteiroes: null, lotes: null, calcadas: null });
         if (!projetoSel) return;
         (async () => {
             try {
@@ -468,12 +510,12 @@ export default function RestricoesViewerOL() {
         if (!mapRef.current) return;
 
         setLayerData(L.aoi, (geo?.aoi || geo?.aoi_snapshot) && {
-            type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: geo?.aoi || geo?.aoi_snapshot }],
+            type: "FeatureCollection",
+            features: [{ type: "Feature", properties: {}, geometry: geo?.aoi || geo?.aoi_snapshot }],
         });
         setLayerData(L.av, toFC(geo?.av), styleAV);
         setLayerData(L.corte, toFC(geo?.corte_av), styleCorte);
-        setLayerData(L.ruas_eixo, toFC(geo?.ruas_eixo), styleRuaEixo);
-        setLayerData(L.ruas_mask, toFC(geo?.ruas_mask), styleRuaMask);
+        setLayerData(L.ruas_mask, toFC(geo?.ruas_mask), styleRuaMask); // EXISTENTES cinza cheio
         setLayerData(L.rios_centerline, toFC(geo?.rios_centerline), styleRiosCL);
         setLayerData(L.rios_faixa, toFC(geo?.rios_faixa), styleRiosFx);
         setLayerData(L.lt_centerline, toFC(geo?.lt_centerline), styleLTCL);
@@ -501,26 +543,33 @@ export default function RestricoesViewerOL() {
     // refletir oficiais
     useEffect(() => {
         const L = layersRef.current;
-        setLayerData(L.ofc_vias, toFC(parcelOficial.vias), styleViaOficial);
-        setLayerData(L.ofc_quarteiroes, toFC(parcelOficial.quarteiroes), styleQuartOficial);
-        setLayerData(L.ofc_lotes, toFC(parcelOficial.lotes), styleLoteOficial);
+        setLayerData(L.ofc_vias_area, toFC(parcelOficial.vias_area), styleViasArea);
+        setLayerData(L.ofc_quarteiroes, toFC(parcelOficial.quarteiroes), new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: null }));
+        setLayerData(L.ofc_lotes, toFC(parcelOficial.lotes), makeLoteStyle({
+            strokeColor: "#7c3aed",
+            fillColor: "rgba(124,58,237,0.18)",
+            textColor: "#1f2937",
+            haloColor: "rgba(255,255,255,0.95)",
+        }));
+        setLayerData(layersRef.current.calcadas, toFC(parcelOficial.calcadas), styleCalcada);
     }, [parcelOficial]);
 
     // extraParams enviados ao painel (inclui GUIA)
     const extraParams = useMemo(() => {
         const L = layersRef.current;
+        const guideFC = writeLayerAsFC(L.guia);
         return {
             ruas_mask_fc: toFC(geo?.ruas_mask),
             ruas_eixo_fc: toFC(geo?.ruas_eixo),
-            guia_linha_fc: writeLayerAsFC(L.guia),
-            // dist_min_rua_quarteirao_m: 0  // se quiser sobrepor o default
+            ...(guideFC.features?.length ? { guia_linha_fc: guideFC } : {}),
+            has_ruas_mask_fc: !!(geo?.ruas_mask?.features?.length),
+            has_ruas_eixo_fc: !!(geo?.ruas_eixo?.features?.length),
         };
     }, [geo, layersRef.current.guia?.getSource()?.getRevision?.()]);
 
     // ------ desenhar linha-guia ------
     const startGuideDraw = () => {
         if (!mapRef.current) return;
-        // encerra draw ativo
         if (drawGuideRef.current) {
             mapRef.current.removeInteraction(drawGuideRef.current);
             drawGuideRef.current = null;
@@ -534,18 +583,41 @@ export default function RestricoesViewerOL() {
             }),
         });
         draw.on("drawend", () => {
-            // finaliza o draw automaticamente ao concluir a primeira linha
             if (drawGuideRef.current) {
                 mapRef.current.removeInteraction(drawGuideRef.current);
                 drawGuideRef.current = null;
             }
-            // mantém modo de edição “guia” para permitir ajustar a linha
             setEditTarget("guia");
             mapRef.current?.__recreateInteractions?.("guia");
         });
         drawGuideRef.current = draw;
         mapRef.current.addInteraction(draw);
         setEditTarget("guia");
+    };
+
+    // ------ botão Recalcular (usa camada de lotes da PRÉVIA) ------
+    const [isRecalc, setIsRecalc] = useState(false);
+    const handleRecalcular = async () => {
+        if (!planoId) { alert("Plano não definido."); return; }
+        const L = layersRef.current;
+        const lotes_fc = collectFCFromLayer(L.prev_lotes);
+        if (!lotes_fc.features?.length) {
+            alert("Sem lotes na prévia para recalcular.");
+            return;
+        }
+        setIsRecalc(true);
+        try {
+            const { data } = await axiosAuth.post(`/parcelamento/planos/${planoId}/recalcular/`, {
+                lotes_fc, renumerar: true,
+            });
+            // atualiza LOTES com props recalculadas
+            setLayerData(L.prev_lotes, toFC(data?.lotes), styleLoteFill);
+        } catch (e) {
+            console.error("[recalcular] erro:", e?.response?.data || e?.message || e);
+            alert("Erro ao recalcular. Veja o console.");
+        } finally {
+            setIsRecalc(false);
+        }
     };
 
     return (
@@ -579,7 +651,6 @@ export default function RestricoesViewerOL() {
                     <option value="osm">OSM (Ruas)</option>
                 </select>
 
-
                 {/* Modo de edição */}
                 <div className="flex gap-1 ml-2">
                     <span className="text-xs mr-1 opacity-70">Editar:</span>
@@ -588,7 +659,11 @@ export default function RestricoesViewerOL() {
                     <button className={`border px-2 py-1 rounded ${editTarget === "av" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("av")}>Área Verde</button>
                     <button className={`border px-2 py-1 rounded ${editTarget === "corte" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("corte")}>Corte</button>
                     <button className={`border px-2 py-1 rounded ${editTarget === "loteavel" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("loteavel")}>Loteável</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "rua_mask" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("rua_mask")}>Máscara Rua</button>
+                    <button className={`border px-2 py-1 rounded ${editTarget === "rua_mask" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("rua_mask")}>Ruas (existentes)</button>
+                    <button className={`border px-2 py-1 rounded ${editTarget === "vias_area" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("vias_area")}>Ruas (criadas)</button>
+                    <button className={`border px-2 py-1 rounded ${editTarget === "quarteiroes" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("quarteiroes")}>Quarteirões</button>
+                    <button className={`border px-2 py-1 rounded ${editTarget === "lotes" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("lotes")}>Lotes</button>
+                    <button className={`border px-2 py-1 rounded ${editTarget === "calcadas" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("calcadas")}>Calçadas</button>
                     {/* Guia */}
                     <button className={`border px-2 py-1 rounded ${editTarget === "guia" ? "bg-amber-500 text-white" : "bg-white"}`} onClick={() => setEditTarget("guia")} title="Editar linha-guia">Guia</button>
                     <button className="border px-2 py-1 rounded bg-amber-100 hover:bg-amber-200" onClick={startGuideDraw} title="Desenhar nova linha-guia">➕ Desenhar guia</button>
@@ -612,10 +687,18 @@ export default function RestricoesViewerOL() {
                         Área
                     </button>
                 </div>
+
+                {/* Recalcular */}
+                <div className="flex gap-1 ml-2">
+                    <button className="border px-3 py-1 rounded bg-white hover:bg-slate-100"
+                        onClick={handleRecalcular} disabled={isRecalc || !planoId}>
+                        {isRecalc ? "⏳ Recalculando..." : "Recalcular lotes"}
+                    </button>
+                </div>
             </div>
 
             {/* Painel parcelamento */}
-            <div className="absolute z-[1000] bottom-10 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[360px]">
+            <div className="absolute z-[1000] bottom-10 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[380px]">
                 <h3 className="font-semibold mb-2">Parcelamento</h3>
                 <ParcelamentoPanel
                     map={mapRef.current}
@@ -623,19 +706,25 @@ export default function RestricoesViewerOL() {
                     alFeature={geo?.area_loteavel?.features?.[0] || (geo?.aoi && { type: "Feature", geometry: geo?.aoi, properties: {} })}
                     onPreview={(data) => {
                         const L = layersRef.current;
-                        setLayerData(L.prev_vias, toFC(data?.vias), styleViaPreview);
-                        setLayerData(L.prev_quarteiroes, toFC(data?.quarteiroes), styleQuartPreview);
-                        setLayerData(L.prev_lotes, toFC(data?.lotes), styleLotePreview);
+                        setLayerData(L.prev_vias_area, toFC(data?.vias_area), styleViasArea);           // NOVO: áreas cinza criadas
+                        setLayerData(L.prev_quarteiroes, toFC(data?.quarteiroes), styleQuartBorda);
+                        setLayerData(L.prev_lotes, toFC(data?.lotes), styleLoteFill);                    // amarelo + # + área
+                        setLayerData(L.calcadas, toFC(data?.calcadas), styleCalcada);                    // brancas
                     }}
                     onMaterialize={async (versaoId) => {
-                        const gj = await getVersaoGeojson(versaoId);
-                        setParcelOficial({ vias: gj?.vias || null, quarteiroes: gj?.quarteiroes || null, lotes: gj?.lotes || null });
+                        const gjv = await getVersaoGeojson(versaoId);
+                        setParcelOficial({
+                            vias_area: gjv?.vias_area || null,               // NOVO
+                            quarteiroes: gjv?.quarteiroes || null,
+                            lotes: gjv?.lotes || null,
+                            calcadas: gjv?.calcadas || null,
+                        });
                         const L = layersRef.current;
-                        setLayerData(L.prev_vias, { type: "FeatureCollection", features: [] }, styleViaPreview);
-                        setLayerData(L.prev_quarteiroes, { type: "FeatureCollection", features: [] }, styleQuartPreview);
-                        setLayerData(L.prev_lotes, { type: "FeatureCollection", features: [] }, styleLotePreview);
+                        setLayerData(L.prev_vias_area, { type: "FeatureCollection", features: [] }, styleViasArea);
+                        setLayerData(L.prev_quarteiroes, { type: "FeatureCollection", features: [] }, styleQuartBorda);
+                        setLayerData(L.prev_lotes, { type: "FeatureCollection", features: [] }, styleLoteFill);
+                        setLayerData(L.calcadas, { type: "FeatureCollection", features: [] }, styleCalcada);
                     }}
-                    // passa ruas/guia para o backend (respeito de distância/orientação)
                     extraParams={extraParams}
                 />
                 <div className="text-[11px] text-gray-600 mt-2">

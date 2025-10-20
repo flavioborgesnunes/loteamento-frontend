@@ -24,8 +24,16 @@ const LYR_LOTES = "parcel_lotes_line";
  *  - alFeature: GeoJSON Feature
  *  - onPreview?: (data) => void
  *  - onMaterialize?: (versaoId) => void
+ *  - extraParams?: objeto com { ruas_mask_fc, ruas_eixo_fc, guia_linha_fc, ... }
  */
-export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPreview, onMaterialize, extraParams = {} }) {
+export default function ParcelamentoPanel({
+    map = null,
+    planoId,
+    alFeature,
+    onPreview,
+    onMaterialize,
+    extraParams = {},
+}) {
     const {
         previewParcelamento,
         materializarParcelamento,
@@ -41,6 +49,8 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         compr_max_quarteirao_m: 200,
         orientacao_graus: null,
         srid_calc: 3857,
+        // NOVO: largura da calçada
+        calcada_largura_m: 2.5,
     });
 
     const [metrics, setMetrics] = useState(null);
@@ -83,8 +93,7 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         if (!map.getLayer(LYR_LOTES)) map.addLayer({ id: LYR_LOTES, type: "line", source: SRC_LOTES, paint: { "line-width": 1, "line-color": "#0ea5e9" } });
     };
 
-    // ======== LEAFLET-GEOMAN (acrescentado) ========
-    // grupos de layers para PRÉVIA (editáveis)
+    // ======== LEAFLET-GEOMAN (mantido) ========
     const viasGroupRef = useRef(null);
     const quartGroupRef = useRef(null);
     const lotesGroupRef = useRef(null);
@@ -93,23 +102,19 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         if (!isLeaflet) return;
         const lf = map;
 
-        // cria groups 1x
         if (!viasGroupRef.current) {
             viasGroupRef.current = L.layerGroup().addTo(lf);
             quartGroupRef.current = L.layerGroup().addTo(lf);
             lotesGroupRef.current = L.layerGroup().addTo(lf);
         }
 
-        // opções globais “boas” de edição
         lf.pm.setGlobalOptions({
             snappable: true,
             snapDistance: 30,
             allowSelfIntersection: false,
         });
 
-        // ao criar manualmente novas linhas no mapa
         const onCreate = (e) => {
-            // se o usuário desenhar uma linha, coloca no grupo de vias
             if (e.layer && e.layer instanceof L.Polyline) {
                 e.layer.setStyle({ color: "#0ea5e9", weight: 3 });
                 e.layer.addTo(viasGroupRef.current);
@@ -136,27 +141,39 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         }).addTo(groupRef.current);
         return layer.getLayers().length;
     };
-    const collectViasAsGeoJSON = () => {
-        if (!isLeaflet || !viasGroupRef.current) return { type: "FeatureCollection", features: [] };
-        const fc = { type: "FeatureCollection", features: [] };
-        viasGroupRef.current.eachLayer((l) => {
-            if (l.toGeoJSON) {
-                const f = l.toGeoJSON();
-                if (f?.geometry?.type === "LineString") fc.features.push(f);
-            }
-        });
-        return fc;
-    };
 
     // ======== AÇÕES ========
     const loadPreview = async () => {
         if (!planoId) { alert("Selecione um projeto para criar/obter um Plano de Parcelamento."); return; }
         if (!alFeature?.geometry) { alert("Área Loteável/AOI não encontrada."); return; }
 
+        // inclui calcada_largura_m no merge
+        const mergedParams = { ...params, ...(extraParams || {}) };
+
+        // logs enxutos (contagens e primeiros tipos)
+        const summarizeFC = (fc) => !fc ? null : {
+            type: fc.type,
+            n: fc.features?.length || 0,
+            g0: fc.features?.[0]?.geometry?.type,
+        };
+
+        console.log("[parcelamento] sending params:", {
+            frente_min_m: mergedParams.frente_min_m,
+            prof_min_m: mergedParams.prof_min_m,
+            compr_max_quarteirao_m: mergedParams.compr_max_quarteirao_m,
+            calcada_largura_m: mergedParams.calcada_largura_m, // <— novo log
+            has_ruas_mask_fc: !!mergedParams.ruas_mask_fc,
+            ruas_mask_fc: summarizeFC(mergedParams.ruas_mask_fc),
+            has_ruas_eixo_fc: !!mergedParams.ruas_eixo_fc,
+            ruas_eixo_fc: summarizeFC(mergedParams.ruas_eixo_fc),
+        });
+
         setIsPreviewing(true);
         try {
-            const mergedParams = { ...params, ...(extraParams || {}) };
-            const data = await previewParcelamento(planoId, { alGeom: alFeature.geometry, params: mergedParams });
+            const data = await previewParcelamento(planoId, {
+                alGeom: alFeature.geometry,
+                params: mergedParams,
+            });
             setMetrics(data?.metrics || null);
 
             if (isMapbox) {
@@ -177,11 +194,7 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
                 const nVias = addGeoJSONEditable(viasGroupRef, data?.vias, { color: "#0ea5e9", weight: 3 });
                 addGeoJSONEditable(quartGroupRef, data?.quarteiroes, { color: "#0ea5e9", weight: 2, fillOpacity: 0.10 });
                 addGeoJSONEditable(lotesGroupRef, data?.lotes, { color: "#0ea5e9", weight: 1 });
-
-                // habilita edição global dos objetos da prévia (handles visíveis)
                 try { map.pm.enableGlobalEditMode(); } catch { }
-
-                // se não veio via alguma, já ativa modo de desenhar linha
                 if (!nVias) { try { map.pm.enableDraw("Line", { snappable: true }); } catch { } }
             }
 
@@ -204,40 +217,23 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
             try {
                 const features = [];
                 map.eachLayer((l) => {
-                    // buscamos as linhas criadas pelo GeoJSON da PRÉVIA
-                    const isPreviewPane = l?.options?.pane === "pane-parcel-prev";
-                    const isVia = l?.options?._parcelTag === "vias";
                     const isLine = typeof l?.toGeoJSON === "function" && l?.toGeoJSON()?.geometry?.type?.includes("Line");
-                    if (isPreviewPane && isVia && isLine) {
+                    if (isLine) {
                         const gj = l.toGeoJSON();
-                        if (gj?.type === "Feature") {
-                            features.push(gj);
-                        } else if (gj) {
-                            features.push({ type: "Feature", geometry: gj.geometry || gj, properties: gj.properties || {} });
-                        }
+                        if (gj?.type === "Feature") features.push(gj);
+                        else if (gj) features.push({ type: "Feature", geometry: gj.geometry || gj, properties: gj.properties || {} });
                     }
                 });
-                if (features.length) {
-                    userEdits.vias = { type: "FeatureCollection", features };
-                }
+                if (features.length) userEdits.vias = { type: "FeatureCollection", features };
             } catch (e) {
                 console.warn("[Leaflet Geoman] falha ao coletar edições:", e?.message || e);
             }
         }
 
-        // (mantém a coleta do Mapbox-Draw como fallback)
-        if (drawRef.current && !userEdits.vias) {
-            try {
-                const edited = drawRef.current.getAll();
-                if (edited?.features?.length) userEdits.vias = edited;
-            } catch { }
-        }
-
-
+        const mergedParams = { ...params, ...(extraParams || {}) };
 
         setIsMaterializing(true);
         try {
-            const mergedParams = { ...params, ...(extraParams || {}) };
             const res = await materializarParcelamento(planoId, {
                 alGeom: alFeature.geometry,
                 params: mergedParams,
@@ -245,7 +241,6 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
                 isOficial: true,
                 nota: "",
             });
-
 
             const vId = res?.versao_id;
             if (!vId) { alert("Materialização não retornou versao_id."); return; }
@@ -260,7 +255,6 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
                 upsertSource(SRC_LOTES, gj.lotes || { type: "FeatureCollection", features: [] });
                 ensureLayers();
             }
-            // No Leaflet, quem pinta o oficial é seu viewer (já está pronto)
         } catch (e) {
             console.error("[materializar parcelamento] erro:", e?.response?.data || e?.message || e);
             alert("Erro ao materializar. Veja o console.");
@@ -291,28 +285,64 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
         <div className="p-3 space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                 <label>Frente mínima (m)
-                    <input type="number" className="input" value={params.frente_min_m}
-                        onChange={(e) => setParams(p => ({ ...p, frente_min_m: parseFloat(e.target.value) }))} />
+                    <input
+                        type="number"
+                        className="input"
+                        value={params.frente_min_m}
+                        onChange={(e) => setParams(p => ({ ...p, frente_min_m: parseFloat(e.target.value) }))}
+                    />
                 </label>
                 <label>Profundidade mínima (m)
-                    <input type="number" className="input" value={params.prof_min_m}
-                        onChange={(e) => setParams(p => ({ ...p, prof_min_m: parseFloat(e.target.value) }))} />
+                    <input
+                        type="number"
+                        className="input"
+                        value={params.prof_min_m}
+                        onChange={(e) => setParams(p => ({ ...p, prof_min_m: parseFloat(e.target.value) }))}
+                    />
                 </label>
                 <label>Larg. rua vertical (m)
-                    <input type="number" className="input" value={params.larg_rua_vert_m}
-                        onChange={(e) => setParams(p => ({ ...p, larg_rua_vert_m: parseFloat(e.target.value) }))} />
+                    <input
+                        type="number"
+                        className="input"
+                        value={params.larg_rua_vert_m}
+                        onChange={(e) => setParams(p => ({ ...p, larg_rua_vert_m: parseFloat(e.target.value) }))}
+                    />
                 </label>
                 <label>Larg. rua horizontal (m)
-                    <input type="number" className="input" value={params.larg_rua_horiz_m}
-                        onChange={(e) => setParams(p => ({ ...p, larg_rua_horiz_m: parseFloat(e.target.value) }))} />
+                    <input
+                        type="number"
+                        className="input"
+                        value={params.larg_rua_horiz_m}
+                        onChange={(e) => setParams(p => ({ ...p, larg_rua_horiz_m: parseFloat(e.target.value) }))}
+                    />
                 </label>
                 <label>Comp. máx quarteirão (m)
-                    <input type="number" className="input" value={params.compr_max_quarteirao_m}
-                        onChange={(e) => setParams(p => ({ ...p, compr_max_quarteirao_m: parseFloat(e.target.value) }))} />
+                    <input
+                        type="number"
+                        className="input"
+                        value={params.compr_max_quarteirao_m}
+                        onChange={(e) => setParams(p => ({ ...p, compr_max_quarteirao_m: parseFloat(e.target.value) }))}
+                    />
                 </label>
                 <label>Orientação (°) (opcional)
-                    <input type="number" className="input" value={params.orientacao_graus ?? ""}
-                        onChange={(e) => setParams(p => ({ ...p, orientacao_graus: (e.target.value === "" ? null : parseFloat(e.target.value)) }))} />
+                    <input
+                        type="number"
+                        className="input"
+                        value={params.orientacao_graus ?? ""}
+                        onChange={(e) => setParams(p => ({ ...p, orientacao_graus: (e.target.value === "" ? null : parseFloat(e.target.value)) }))}
+                    />
+                </label>
+
+                {/* NOVO: Largura das calçadas */}
+                <label className="md:col-span-3">Largura da calçada (m)
+                    <input
+                        type="number"
+                        className="input"
+                        step="0.1"
+                        min="0"
+                        value={params.calcada_largura_m}
+                        onChange={(e) => setParams(p => ({ ...p, calcada_largura_m: parseFloat(e.target.value) }))}
+                    />
                 </label>
             </div>
 
@@ -343,7 +373,6 @@ export default function ParcelamentoPanel({ map = null, planoId, alFeature, onPr
                     <div><b>Lotes:</b> {metrics.n_lotes}</div>
                 </div>
             )}
-
         </div>
     );
 }
