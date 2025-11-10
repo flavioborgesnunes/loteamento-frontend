@@ -88,7 +88,7 @@ export default function ParcelamentoPanel({
     };
     const ensureLayers = () => {
         if (!isMapbox) return;
-        if (!map.getLayer(LYR_VIAS)) map.addLayer({ id: LYR_VIAS, type: "line", source: SRC_VIAS, paint: { "line-width": 3, "line-color": "#0ea5e9" } });
+        if (!map.getLayer(LYR_VIAS)) map.addLayer({ id: LYR_VIAS, type: "line", source: SRC_VIAS, paint: { "line-width": 3, "line-color": "#ffffff" } });
         if (!map.getLayer(LYR_QUART)) map.addLayer({ id: LYR_QUART, type: "fill", source: SRC_QUART, paint: { "fill-opacity": 0.25, "fill-color": "#0ea5e9" } });
         if (!map.getLayer(LYR_LOTES)) map.addLayer({ id: LYR_LOTES, type: "line", source: SRC_LOTES, paint: { "line-width": 1, "line-color": "#0ea5e9" } });
     };

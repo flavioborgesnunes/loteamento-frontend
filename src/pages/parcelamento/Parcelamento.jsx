@@ -92,6 +92,62 @@ function collectFCFromLayer(layer) {
     return gj.writeFeaturesObject(feats, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
 }
 
+
+// ====== NEW: Geom helpers (rotação/escala por orientação) ======
+function rotateGeom(geom, angleDeg, anchor) {
+    // OpenLayers: rotate usa radianos; positiva = sentido anti-horário
+    const rad = (angleDeg * Math.PI) / 180;
+    geom.rotate(rad, anchor);
+}
+
+function scaleGeom(geom, sx, sy, anchor) {
+    // geom.scale(sx, sy, anchor) existe no OL
+    geom.scale(sx, sy, anchor);
+}
+
+function getBoundsSizeAligned(geom, angleDeg) {
+    const clone = geom.clone();
+    const anchor = clone.getInteriorPoint ? clone.getInteriorPoint().getCoordinates() : clone.getExtent(); // fallback
+    rotateGeom(clone, -angleDeg, anchor);
+    const [minx, miny, maxx, maxy] = clone.getExtent();
+    return { w: Math.max(0, maxx - minx), h: Math.max(0, maxy - miny), anchor };
+}
+
+function applyFrenteProf(geom, angleDeg, frenteAlvoM, profAlvoM) {
+    const { w, h, anchor } = getBoundsSizeAligned(geom, angleDeg);
+    if (w <= 0 || h <= 0) return false;
+    const sx = frenteAlvoM / w;
+    const sy = profAlvoM / h;
+    // alinhar -> escalar -> desfazer rotação
+    rotateGeom(geom, -angleDeg, anchor);
+    scaleGeom(geom, sx, sy, anchor);
+    rotateGeom(geom, angleDeg, anchor);
+    return true;
+}
+
+function applyUniformScale(geom, percent, anchor) {
+    const s = percent / 100.0;
+    scaleGeom(geom, s, s, anchor);
+    return true;
+}
+
+function featureLayerKey(feature, layersRef) {
+    // tenta descobrir em qual layer a feature está
+    const L = layersRef.current;
+    for (const [k, lyr] of Object.entries(L)) {
+        const src = lyr?.getSource?.();
+        if (src && src.hasFeature && src.hasFeature(feature)) return k;
+    }
+    return null;
+}
+
+function isPolygonish(f) {
+    const g = f.getGeometry?.();
+    const t = g?.getType?.();
+    return t === "Polygon" || t === "MultiPolygon";
+}
+
+
 // ---------------- Estilos
 const styleAoi = new Style({ stroke: new Stroke({ color: "#2c7be5", width: 2 }), fill: new Fill({ color: "rgba(44,123,229,0.05)" }) });
 const styleAV = new Style({ stroke: new Stroke({ color: "#007a4d", width: 2 }), fill: new Fill({ color: "rgba(65,214,134,0.45)" }) });
@@ -105,16 +161,19 @@ const styleFerCL = new Style({ stroke: new Stroke({ color: "#6D4C41", width: 2 }
 const styleFerFx = new Style({ stroke: new Stroke({ color: "#6D4C41", width: 2 }), fill: new Fill({ color: "rgba(109,76,65,0.25)" }) });
 const styleLoteavel = new Style({ stroke: new Stroke({ color: "#FFB300", width: 2 }), fill: new Fill({ color: "rgba(255,213,79,0.22)" }) });
 
-// VIAS NOVAS (áreas/máscaras cinza)
+// VIAS NOVAS — Áreas cinza e Eixos brancos
 const styleViasArea = new Style({
     stroke: new Stroke({ color: "#9ca3af", width: 1 }),
     fill: new Fill({ color: "rgba(156,163,175,0.8)" }),
+});
+const styleViasLineWhite = new Style({
+    stroke: new Stroke({ color: "#ffffff", width: 2 }),
 });
 
 // QUARTEIRÕES: borda azul
 const styleQuartBorda = new Style({ stroke: new Stroke({ color: "#0ea5e9", width: 2 }), fill: null });
 
-// LOTES: preenchido amarelo + labels (# e área)
+// LOTES (preenchido amarelo + labels)
 function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor = "rgba(255,255,255,0.95)" }) {
     const cache = new WeakMap();
     return (feature, resolution) => {
@@ -122,7 +181,12 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
         if (cached && cached.__res === resolution) return cached.styles;
 
         const styles = [];
-        styles.push(new Style({ stroke: new Stroke({ color: strokeColor, width: 1.5 }), fill: new Fill({ color: fillColor }) }));
+        styles.push(
+            new Style({
+                stroke: new Stroke({ color: strokeColor, width: 1.5 }),
+                fill: new Fill({ color: fillColor }),
+            })
+        );
 
         const props = feature.getProperties?.() || {};
         const lotNumber = props.lot_number ?? props.lotNumber ?? props.id;
@@ -136,38 +200,44 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
 
         if (centerLonLat && centerLonLat.length === 2 && areaLabel) {
             const center3857 = fromLonLat(centerLonLat);
-            styles.push(new Style({
-                geometry: new OLPoint(center3857),
-                text: new Text({
-                    text: areaLabel,
-                    font: "12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-                    fill: new Fill({ color: textColor }),
-                    stroke: new Stroke({ color: haloColor, width: 3 }),
-                    overflow: true,
-                    offsetY: 0,
-                }),
-            }));
+            styles.push(
+                new Style({
+                    geometry: new OLPoint(center3857),
+                    text: new Text({
+                        text: areaLabel,
+                        font: "12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+                        fill: new Fill({ color: textColor }),
+                        stroke: new Stroke({ color: haloColor, width: 3 }),
+                        overflow: true,
+                        offsetY: 0,
+                    }),
+                })
+            );
         }
 
         if (cornerLonLat && cornerLonLat.length === 2 && lotNumber != null) {
             const corner3857 = fromLonLat(cornerLonLat);
-            styles.push(new Style({
-                geometry: new OLPoint(corner3857),
-                text: new Text({
-                    text: `#${lotNumber}`,
-                    font: "bold 12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-                    fill: new Fill({ color: textColor }),
-                    stroke: new Stroke({ color: haloColor, width: 3 }),
-                    overflow: true,
-                    offsetX: 8, offsetY: -8,
-                }),
-            }));
+            styles.push(
+                new Style({
+                    geometry: new OLPoint(corner3857),
+                    text: new Text({
+                        text: `#${lotNumber}`,
+                        font: "bold 12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+                        fill: new Fill({ color: textColor }),
+                        stroke: new Stroke({ color: haloColor, width: 3 }),
+                        overflow: true,
+                        offsetX: 8,
+                        offsetY: -8,
+                    }),
+                })
+            );
         }
 
         cache.set(feature, { __res: resolution, styles });
         return styles;
     };
 }
+
 const styleLoteFill = makeLoteStyle({
     strokeColor: "#f59e0b",
     fillColor: "rgba(255, 213, 79, 0.35)",
@@ -192,30 +262,76 @@ export default function Parcelamento() {
     const baseLayersRef = useRef({});
     const layersRef = useRef({
         aoi: null, loteavel: null, av: null, corte: null,
-        ruas_mask: null, // EXISTENTES (já vieram da restrição)
+        ruas_mask: null,
         rios_centerline: null, rios_faixa: null,
         lt_centerline: null, lt_faixa: null,
         ferrovias_centerline: null, ferrovias_faixa: null,
 
         // prévia
-        prev_vias_area: null,           // NOVO: áreas/máscaras cinza das vias criadas
+        prev_vias_area: null,      // áreas cinza
+        prev_vias_line: null,      // eixo branco
         prev_quarteiroes: null,
         prev_lotes: null,
         calcadas: null,
 
         // oficiais
-        ofc_vias_area: null,            // NOVO: áreas/máscaras cinza derivadas dos eixos oficiais
+        ofc_vias_area: null,       // áreas cinza
+        ofc_vias_line: null,       // eixo branco
         ofc_quarteiroes: null,
         ofc_lotes: null,
 
-        guia: null, // orientadora
+        guia: null,
     });
+
+    // ---- Z-INDEX BOOST helpers ----
+    const defaultZRef = useRef({});
+    const ACTIVE_Z = 999; // z-index quando o modo está focado
+
+    const captureDefaultZ = () => {
+        if (Object.keys(defaultZRef.current).length) return;
+        Object.entries(layersRef.current).forEach(([k, lyr]) => {
+            if (lyr && typeof lyr.getZIndex === "function") {
+                defaultZRef.current[k] = lyr.getZIndex() ?? 0;
+            }
+        });
+    };
+    const resetAllZ = () => {
+        Object.entries(layersRef.current).forEach(([k, lyr]) => {
+            if (lyr && typeof lyr.setZIndex === "function") {
+                lyr.setZIndex(defaultZRef.current[k] ?? 0);
+            }
+        });
+    };
+    const boostLayers = (keys = []) => {
+        keys.forEach((k) => {
+            const lyr = layersRef.current[k];
+            if (lyr && typeof lyr.setZIndex === "function") {
+                lyr.setZIndex(ACTIVE_Z);
+            }
+        });
+    };
+    const layersForMode = (mode) => {
+        switch (mode) {
+            case "aoi": return ["aoi"];
+            case "av": return ["av"];
+            case "corte": return ["corte"];
+            case "loteavel": return ["loteavel"];
+            case "rua_mask": return ["ruas_mask"];
+            case "guia": return ["guia"];
+            case "quarteiroes": return ["prev_quarteiroes"];
+            case "lotes": return ["prev_lotes"];
+            case "calcadas": return ["calcadas"];
+            case "vias_area": return ["prev_vias_area", "prev_vias_line"];
+            default: return [];
+        }
+    };
 
     const selectRef = useRef(null);
     const modifyRef = useRef(null);
     const translateRef = useRef(null);
     const snapRefs = useRef([]);
     const drawGuideRef = useRef(null);
+    const drawRef = useRef(null);
 
     const [projetos, setProjetos] = useState([]);
     const [projetoSel, setProjetoSel] = useState("");
@@ -224,7 +340,7 @@ export default function Parcelamento() {
     const [geo, setGeo] = useState(null);
 
     const [planoId, setPlanoId] = useState(null);
-    const [parcelOficial, setParcelOficial] = useState({ vias_area: null, quarteiroes: null, lotes: null, calcadas: null });
+    const [parcelOficial, setParcelOficial] = useState({ vias_area: null, vias: null, quarteiroes: null, lotes: null, calcadas: null });
 
     const [editTarget, setEditTarget] = useState("none"); // none|aoi|av|corte|loteavel|rua_mask|guia|quarteiroes|lotes|calcadas|vias_area
     const [measureMode, setMeasureMode] = useState("none"); // none|distance|area
@@ -274,7 +390,7 @@ export default function Parcelamento() {
         L.loteavel = mkVec(597, styleLoteavel);
         L.av = mkVec(580, styleAV);
         L.corte = mkVec(585, styleCorte);
-        L.ruas_mask = mkVec(590, styleRuaMask); // EXISTENTES cheias
+        L.ruas_mask = mkVec(590, styleRuaMask);
         L.rios_centerline = mkVec(595, styleRiosCL);
         L.rios_faixa = mkVec(595, styleRiosFx);
         L.lt_centerline = mkVec(596, styleLTCL);
@@ -283,21 +399,28 @@ export default function Parcelamento() {
         L.ferrovias_faixa = mkVec(597, styleFerFx);
 
         // prévias
-        L.prev_vias_area = mkVec(609, styleViasArea);     // NOVO: cinza cheio
+        L.prev_vias_area = mkVec(609, styleViasArea);      // CINZA
+        L.prev_vias_line = mkVec(610, styleViasLineWhite); // BRANCO (eixo)
         L.prev_quarteiroes = mkVec(611, styleQuartBorda);
         L.prev_lotes = new VectorLayer({
             zIndex: 612,
             source: new VectorSource(),
-            style: styleLoteFill,
+            style: makeLoteStyle({
+                strokeColor: "#f59e0b",
+                fillColor: "rgba(255, 213, 79, 0.35)",
+                textColor: "#0b132b",
+                haloColor: "rgba(255,255,255,0.95)",
+            }),
             declutter: true,
             renderBuffer: 100,
         });
 
         // oficiais
-        L.ofc_vias_area = mkVec(613, styleViasArea);      // NOVO: cinza cheio
-        L.ofc_quarteiroes = mkVec(614, new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: null }));
+        L.ofc_vias_area = mkVec(613, styleViasArea);       // CINZA
+        L.ofc_vias_line = mkVec(614, styleViasLineWhite);  // BRANCO
+        L.ofc_quarteiroes = mkVec(615, new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: null }));
         L.ofc_lotes = new VectorLayer({
-            zIndex: 615,
+            zIndex: 616,
             source: new VectorSource(),
             style: makeLoteStyle({
                 strokeColor: "#7c3aed",
@@ -310,9 +433,9 @@ export default function Parcelamento() {
         });
 
         // calcadas
-        L.calcadas = mkVec(605, styleCalcada);
+        L.calcadas = mkVec(621, styleCalcada);
 
-        // GUIA (editável/desenhável)
+        // GUIA
         L.guia = new VectorLayer({
             zIndex: 606,
             source: new VectorSource(),
@@ -330,14 +453,14 @@ export default function Parcelamento() {
             ]),
         });
 
-        // expose layers for other modules if needed
-        window.__layers = layersRef.current;
+        // captura z-index padrão (uma vez)
+        captureDefaultZ();
 
         // --- Interações recriáveis por modo ---
         const buildLayerFilter = (mode) => {
             const Lx = layersRef.current;
             const allowPreview = (lyr) =>
-                lyr === Lx.prev_vias_area || lyr === Lx.prev_quarteiroes || lyr === Lx.prev_lotes;
+                lyr === Lx.prev_vias_area || lyr === Lx.prev_vias_line || lyr === Lx.prev_quarteiroes || lyr === Lx.prev_lotes;
             if (mode === "none") return (lyr) => allowPreview(lyr) || lyr === Lx.guia || lyr === Lx.ruas_mask;
             if (mode === "aoi") return (lyr) => allowPreview(lyr) || lyr === Lx.aoi || lyr === Lx.guia || lyr === Lx.ruas_mask;
             if (mode === "av") return (lyr) => allowPreview(lyr) || lyr === Lx.av || lyr === Lx.guia || lyr === Lx.ruas_mask;
@@ -348,7 +471,7 @@ export default function Parcelamento() {
             if (mode === "quarteiroes") return (lyr) => lyr === Lx.prev_quarteiroes;
             if (mode === "lotes") return (lyr) => lyr === Lx.prev_lotes;
             if (mode === "calcadas") return (lyr) => lyr === Lx.calcadas;
-            if (mode === "vias_area") return (lyr) => lyr === Lx.prev_vias_area || lyr === Lx.ofc_vias_area;
+            if (mode === "vias_area") return (lyr) => lyr === Lx.prev_vias_area || lyr === Lx.ofc_vias_area || lyr === Lx.prev_vias_line || lyr === Lx.ofc_vias_line;
             return (lyr) => allowPreview(lyr) || lyr === Lx.guia || lyr === Lx.ruas_mask;
         };
 
@@ -356,6 +479,68 @@ export default function Parcelamento() {
             if (selectRef.current) mapRef.current.removeInteraction(selectRef.current);
             if (modifyRef.current) mapRef.current.removeInteraction(modifyRef.current);
             if (translateRef.current) mapRef.current.removeInteraction(translateRef.current);
+
+            // ======= DRAW =======
+            if (drawRef.current) {
+                mapRef.current.removeInteraction(drawRef.current);
+                drawRef.current = null;
+            }
+
+            // define tipo de desenho conforme modo
+            let drawType = null;
+            let drawSource = null;
+
+            switch (mode) {
+                case "aoi":
+                case "av":
+                case "corte":
+                case "loteavel":
+                case "rua_mask":
+                case "calcadas":
+                case "quarteiroes":
+                case "lotes":
+                    drawType = "Polygon";
+                    break;
+                case "vias_area":
+                case "guia":
+                    drawType = "LineString";
+                    break;
+                default:
+                    drawType = null;
+            }
+
+            if (drawType) {
+                const Lx = layersRef.current;
+                const layerKey = layersForMode(mode)?.[0]; // pega camada principal do modo
+                drawSource = Lx[layerKey]?.getSource?.();
+
+                if (drawSource) {
+                    const draw = new Draw({
+                        source: drawSource,
+                        type: drawType,
+                        style: new Style({
+                            stroke: new Stroke({ color: "#2563eb", width: 2 }),
+                            fill: new Fill({ color: "rgba(37,99,235,0.15)" }),
+                            image: new CircleStyle({
+                                radius: 4,
+                                fill: new Fill({ color: "#2563eb" }),
+                            }),
+                        }),
+                    });
+
+                    draw.on("drawend", (evt) => {
+                        const feat = evt.feature;
+                        // define ID incremental básico
+                        const src = drawSource;
+                        feat.setProperties({ id: src.getFeatures().length });
+                    });
+
+                    mapRef.current.addInteraction(draw);
+                    drawRef.current = draw;
+                }
+            }
+
+
             snapRefs.current.forEach((s) => mapRef.current.removeInteraction(s));
             snapRefs.current = [];
 
@@ -373,7 +558,7 @@ export default function Parcelamento() {
             });
             mapRef.current.addInteraction(selectRef.current);
 
-            // "clicou → só ele editável"
+            // seleção exclusiva (um por vez)
             selectRef.current.on("select", (evt) => {
                 const sel = selectRef.current.getFeatures();
                 if (evt.selected && evt.selected.length) {
@@ -397,14 +582,23 @@ export default function Parcelamento() {
             translateRef.current = new Translate({ features: selectRef.current.getFeatures(), condition: shiftKeyOnly });
             mapRef.current.addInteraction(translateRef.current);
 
+            // SNAP com prioridade para camadas focadas
             const Lx = layersRef.current;
-            [
-                Lx.prev_vias_area, Lx.prev_quarteiroes, Lx.prev_lotes, Lx.guia,
+            const focusKeys = layersForMode(mode);
+            const focusLayers = focusKeys.map(k => Lx[k]).filter(Boolean);
+
+            const allLayers = [
+                Lx.prev_vias_area, Lx.prev_vias_line, Lx.prev_quarteiroes, Lx.prev_lotes, Lx.guia,
                 Lx.aoi, Lx.av, Lx.corte, Lx.loteavel, Lx.ruas_mask,
                 Lx.rios_centerline, Lx.rios_faixa, Lx.lt_centerline, Lx.lt_faixa,
-                Lx.ferrovias_centerline, Lx.ferrovias_faixa, Lx.calcadas, Lx.ofc_vias_area,
-            ].forEach((lyr) => {
-                if (!lyr) return;
+                Lx.ferrovias_centerline, Lx.ferrovias_faixa, Lx.calcadas,
+                Lx.ofc_vias_area, Lx.ofc_vias_line,
+            ].filter(Boolean);
+
+            const restLayers = allLayers.filter(lyr => !focusLayers.includes(lyr));
+            const ordered = [...focusLayers, ...restLayers];
+
+            ordered.forEach((lyr) => {
                 const s = new Snap({ source: lyr.getSource() });
                 mapRef.current.addInteraction(s);
                 snapRefs.current.push(s);
@@ -446,9 +640,14 @@ export default function Parcelamento() {
         });
     }, [baseSel]);
 
-    // muda o modo de edição → recria interações
+    // muda o modo de edição → recria interações e aplica z-index boost
     useEffect(() => {
+        // recria interações
         mapRef.current?.__recreateInteractions?.(editTarget);
+        // aplica z-index boost
+        resetAllZ();
+        boostLayers(layersForMode(editTarget));
+        try { mapRef.current?.renderSync?.(); } catch { }
     }, [editTarget]);
 
     // carregar projetos
@@ -467,7 +666,7 @@ export default function Parcelamento() {
     // ao mudar projeto
     useEffect(() => {
         setVersoes([]); setRestricaoSel(""); setGeo(null); setPlanoId(null);
-        setParcelOficial({ vias_area: null, quarteiroes: null, lotes: null, calcadas: null });
+        setParcelOficial({ vias_area: null, vias: null, quarteiroes: null, lotes: null, calcadas: null });
         if (!projetoSel) return;
         (async () => {
             try {
@@ -515,7 +714,7 @@ export default function Parcelamento() {
         });
         setLayerData(L.av, toFC(geo?.av), styleAV);
         setLayerData(L.corte, toFC(geo?.corte_av), styleCorte);
-        setLayerData(L.ruas_mask, toFC(geo?.ruas_mask), styleRuaMask); // EXISTENTES cinza cheio
+        setLayerData(L.ruas_mask, toFC(geo?.ruas_mask), styleRuaMask);
         setLayerData(L.rios_centerline, toFC(geo?.rios_centerline), styleRiosCL);
         setLayerData(L.rios_faixa, toFC(geo?.rios_faixa), styleRiosFx);
         setLayerData(L.lt_centerline, toFC(geo?.lt_centerline), styleLTCL);
@@ -544,6 +743,7 @@ export default function Parcelamento() {
     useEffect(() => {
         const L = layersRef.current;
         setLayerData(L.ofc_vias_area, toFC(parcelOficial.vias_area), styleViasArea);
+        setLayerData(L.ofc_vias_line, toFC(parcelOficial.vias), styleViasLineWhite);
         setLayerData(L.ofc_quarteiroes, toFC(parcelOficial.quarteiroes), new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: null }));
         setLayerData(L.ofc_lotes, toFC(parcelOficial.lotes), makeLoteStyle({
             strokeColor: "#7c3aed",
@@ -611,7 +811,12 @@ export default function Parcelamento() {
                 lotes_fc, renumerar: true,
             });
             // atualiza LOTES com props recalculadas
-            setLayerData(L.prev_lotes, toFC(data?.lotes), styleLoteFill);
+            setLayerData(L.prev_lotes, toFC(data?.lotes), makeLoteStyle({
+                strokeColor: "#f59e0b",
+                fillColor: "rgba(255, 213, 79, 0.35)",
+                textColor: "#0b132b",
+                haloColor: "rgba(255,255,255,0.95)",
+            }));
         } catch (e) {
             console.error("[recalcular] erro:", e?.response?.data || e?.message || e);
             alert("Erro ao recalcular. Veja o console.");
@@ -695,6 +900,14 @@ export default function Parcelamento() {
                         {isRecalc ? "⏳ Recalculando..." : "Recalcular lotes"}
                     </button>
                 </div>
+
+                <button
+                    className={`border px-2 py-1 rounded ${editTarget === "lotes" ? "bg-slate-800 text-white" : "bg-white"}`}
+                    onClick={() => setEditTarget("lotes")}
+                >
+                    🟨 Desenhar lotes
+                </button>
+
             </div>
 
             {/* Painel parcelamento */}
@@ -706,21 +919,24 @@ export default function Parcelamento() {
                     alFeature={geo?.area_loteavel?.features?.[0] || (geo?.aoi && { type: "Feature", geometry: geo?.aoi, properties: {} })}
                     onPreview={(data) => {
                         const L = layersRef.current;
-                        setLayerData(L.prev_vias_area, toFC(data?.vias_area), styleViasArea);           // NOVO: áreas cinza criadas
+                        setLayerData(L.prev_vias_area, toFC(data?.vias_area), styleViasArea);   // áreas cinza criadas
+                        setLayerData(L.prev_vias_line, toFC(data?.vias), styleViasLineWhite);  // EIXOS (linhas) da prévia
                         setLayerData(L.prev_quarteiroes, toFC(data?.quarteiroes), styleQuartBorda);
-                        setLayerData(L.prev_lotes, toFC(data?.lotes), styleLoteFill);                    // amarelo + # + área
-                        setLayerData(L.calcadas, toFC(data?.calcadas), styleCalcada);                    // brancas
+                        setLayerData(L.prev_lotes, toFC(data?.lotes), styleLoteFill);          // amarelo + # + área
+                        setLayerData(L.calcadas, toFC(data?.calcadas), styleCalcada);          // brancas
                     }}
                     onMaterialize={async (versaoId) => {
                         const gjv = await getVersaoGeojson(versaoId);
                         setParcelOficial({
-                            vias_area: gjv?.vias_area || null,               // NOVO
+                            vias_area: gjv?.vias_area || null,
+                            vias: gjv?.vias || null,                      // eixos oficiais (linhas)
                             quarteiroes: gjv?.quarteiroes || null,
                             lotes: gjv?.lotes || null,
                             calcadas: gjv?.calcadas || null,
                         });
                         const L = layersRef.current;
                         setLayerData(L.prev_vias_area, { type: "FeatureCollection", features: [] }, styleViasArea);
+                        setLayerData(L.prev_vias_line, { type: "FeatureCollection", features: [] }, styleViasLineWhite);
                         setLayerData(L.prev_quarteiroes, { type: "FeatureCollection", features: [] }, styleQuartBorda);
                         setLayerData(L.prev_lotes, { type: "FeatureCollection", features: [] }, styleLoteFill);
                         setLayerData(L.calcadas, { type: "FeatureCollection", features: [] }, styleCalcada);

@@ -79,6 +79,7 @@ const MainWrapper = () => {
                             <ItemMenu icon={MapPlus} text="Restrições" to="/loteador" />
                             <ItemMenu icon={Eye} text="Visualizar" to="/visualizar-projetos" />
                             <ItemMenu icon={Eye} text="Parcelamento" to="/parcelamento" />
+                            <ItemMenu icon={Eye} text="Teste" to="/parcelamento/gerar-quarteirao" />
                             <ItemMenu icon={Brain} text="Estudo com AI" to="/ia" />
                             {(user.role === 'dono' || user.role === 'adm') && (
 
