@@ -17,10 +17,27 @@ import GeoJSON from "ol/format/GeoJSON";
 import { fromLonLat } from "ol/proj";
 import { Modify, Snap, Select, Draw } from "ol/interaction";
 import Translate from "ol/interaction/Translate";
-import { click as clickSelectCondition, shiftKeyOnly, altKeyOnly } from "ol/events/condition";
-import { defaults as defaultControls, ScaleLine, FullScreen, MousePosition, Zoom, Rotate, Attribution } from "ol/control";
+import {
+    click as clickSelectCondition,
+    shiftKeyOnly,
+    altKeyOnly,
+    platformModifierKeyOnly,
+    primaryAction,
+    noModifierKeys,
+    singleClick,
+} from "ol/events/condition";
+import {
+    defaults as defaultControls,
+    ScaleLine,
+    FullScreen,
+    MousePosition,
+    Zoom,
+    Rotate,
+    Attribution,
+} from "ol/control";
 import { createStringXY } from "ol/coordinate";
 import { getLength as sphereLength, getArea as sphereArea } from "ol/sphere";
+import { getCenter } from "ol/extent";
 
 // ---------------- Helpers
 const gj = new GeoJSON();
@@ -38,16 +55,23 @@ function buildFCsForFit(geo) {
     const aoiGeom = geo?.aoi || geo?.aoi_snapshot || null;
     const fcAOI = aoiGeom ? toFC({ type: "Feature", geometry: aoiGeom, properties: {} }) : null;
     const fcs = [
-        toFC(geo?.av), toFC(geo?.corte_av),
-        toFC(geo?.ruas_eixo), toFC(geo?.ruas_mask),
-        toFC(geo?.rios_centerline), toFC(geo?.rios_faixa),
-        toFC(geo?.lt_centerline), toFC(geo?.lt_faixa),
-        toFC(geo?.ferrovias_centerline), toFC(geo?.ferrovias_faixa),
+        toFC(geo?.av),
+        toFC(geo?.corte_av),
+        toFC(geo?.ruas_eixo),
+        toFC(geo?.ruas_mask),
+        toFC(geo?.rios_centerline),
+        toFC(geo?.rios_faixa),
+        toFC(geo?.lt_centerline),
+        toFC(geo?.lt_faixa),
+        toFC(geo?.ferrovias_centerline),
+        toFC(geo?.ferrovias_faixa),
         toFC(geo?.area_loteavel),
     ];
     const all = { type: "FeatureCollection", features: [] };
-    fcs.forEach(fc => { if (fc?.features?.length) all.features.push(...fc.features); });
-    return { fcAOI, all: (all.features.length ? all : null) };
+    fcs.forEach((fc) => {
+        if (fc?.features?.length) all.features.push(...fc.features);
+    });
+    return { fcAOI, all: all.features.length ? all : null };
 }
 function setLayerData(vectorLayer, dataFC, style) {
     if (!vectorLayer) return;
@@ -92,67 +116,204 @@ function collectFCFromLayer(layer) {
     return gj.writeFeaturesObject(feats, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
 }
 
+// ======= Frente/Prof alinhado a ângulo =======
+function measureFrenteProfAlongAngle(geom, angleDeg) {
+    if (!geom) return { frente: 0, prof: 0 };
 
-// ====== NEW: Geom helpers (rotação/escala por orientação) ======
-function rotateGeom(geom, angleDeg, anchor) {
-    // OpenLayers: rotate usa radianos; positiva = sentido anti-horário
-    const rad = (angleDeg * Math.PI) / 180;
-    geom.rotate(rad, anchor);
-}
+    let angRad;
 
-function scaleGeom(geom, sx, sy, anchor) {
-    // geom.scale(sx, sy, anchor) existe no OL
-    geom.scale(sx, sy, anchor);
-}
+    if (typeof angleDeg === "number" && isFinite(angleDeg)) {
+        // usa o ângulo informado
+        angRad = (angleDeg * Math.PI) / 180;
+    } else {
+        // descobre o ângulo pela maior aresta do anel externo
+        const type = geom.getType();
+        const coords = geom.getCoordinates();
+        let ring = null;
 
-function getBoundsSizeAligned(geom, angleDeg) {
-    const clone = geom.clone();
-    const anchor = clone.getInteriorPoint ? clone.getInteriorPoint().getCoordinates() : clone.getExtent(); // fallback
-    rotateGeom(clone, -angleDeg, anchor);
-    const [minx, miny, maxx, maxy] = clone.getExtent();
-    return { w: Math.max(0, maxx - minx), h: Math.max(0, maxy - miny), anchor };
-}
+        if (type === "Polygon") {
+            ring = coords?.[0] || null;
+        } else if (type === "MultiPolygon") {
+            ring = coords?.[0]?.[0] || null;
+        }
 
-function applyFrenteProf(geom, angleDeg, frenteAlvoM, profAlvoM) {
-    const { w, h, anchor } = getBoundsSizeAligned(geom, angleDeg);
-    if (w <= 0 || h <= 0) return false;
-    const sx = frenteAlvoM / w;
-    const sy = profAlvoM / h;
-    // alinhar -> escalar -> desfazer rotação
-    rotateGeom(geom, -angleDeg, anchor);
-    scaleGeom(geom, sx, sy, anchor);
-    rotateGeom(geom, angleDeg, anchor);
-    return true;
-}
-
-function applyUniformScale(geom, percent, anchor) {
-    const s = percent / 100.0;
-    scaleGeom(geom, s, s, anchor);
-    return true;
-}
-
-function featureLayerKey(feature, layersRef) {
-    // tenta descobrir em qual layer a feature está
-    const L = layersRef.current;
-    for (const [k, lyr] of Object.entries(L)) {
-        const src = lyr?.getSource?.();
-        if (src && src.hasFeature && src.hasFeature(feature)) return k;
+        if (ring && ring.length >= 2) {
+            let maxLen = -1;
+            let bestAng = 0;
+            for (let i = 0; i < ring.length - 1; i++) {
+                const [x1, y1] = ring[i];
+                const [x2, y2] = ring[i + 1];
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                const len = Math.hypot(dx, dy);
+                if (len > maxLen) {
+                    maxLen = len;
+                    bestAng = Math.atan2(dy, dx);
+                }
+            }
+            angRad = bestAng;
+        } else {
+            angRad = 0;
+        }
     }
-    return null;
+
+    const cos = Math.cos(-angRad);
+    const sin = Math.sin(-angRad);
+
+    const flat = [];
+    const pushCoord = (x, y) => {
+        const xr = x * cos - y * sin;
+        const yr = x * sin + y * cos;
+        flat.push([xr, yr]);
+    };
+
+    const type = geom.getType();
+    const coords = geom.getCoordinates();
+    if (type === "Polygon") {
+        (coords?.[0] || []).forEach(([x, y]) => pushCoord(x, y));
+    } else if (type === "MultiPolygon") {
+        (coords || []).forEach((poly) => (poly?.[0] || []).forEach(([x, y]) => pushCoord(x, y)));
+    } else {
+        const [minx, miny, maxx, maxy] = geom.getExtent();
+        return { frente: maxx - minx, prof: maxy - miny };
+    }
+
+    let minx = +Infinity, maxx = -Infinity;
+    let miny = +Infinity, maxy = -Infinity;
+    for (const [x, y] of flat) {
+        if (x < minx) minx = x;
+        if (x > maxx) maxx = x;
+        if (y < miny) miny = y;
+        if (y > maxy) maxy = y;
+    }
+
+    return {
+        frente: maxx - minx,
+        prof: maxy - miny,
+    };
 }
 
-function isPolygonish(f) {
-    const g = f.getGeometry?.();
-    const t = g?.getType?.();
-    return t === "Polygon" || t === "MultiPolygon";
+
+// Transforma o polígono em um retângulo alinhado ao ângulo desejado,
+// com frente = newFrente e prof = newProf, centrado no lote atual.
+// Transforma o polígono em um retângulo alinhado ao ângulo desejado,'
+// com frente = newFrente e prof = newProf, centrado no lote atual.
+// OBS: parâmetro anchor não é usado (não fixamos frente/fundo).
+function applyFrenteProfLocalScale(feature, angleDeg, newFrente, newProf, anchor = "frente") {
+    const g = feature?.getGeometry?.();
+    if (!g || g.getType?.() !== "Polygon") return false;
+
+    const nf = Number(newFrente);
+    const np = Number(newProf);
+    if (!isFinite(nf) || nf <= 0 || !isFinite(np) || np <= 0) return false;
+
+    // anel externo
+    let ring = g.getCoordinates()?.[0] || [];
+    if (ring.length < 4) return false;
+
+    // tira ponto repetido final
+    const [fx, fy] = ring[0];
+    const [lx, ly] = ring[ring.length - 1];
+    if (fx === lx && fy === ly) {
+        ring = ring.slice(0, -1);
+    }
+
+    // centro em coordenadas originais
+    let cx = 0, cy = 0;
+    ring.forEach(([x, y]) => { cx += x; cy += y; });
+    cx /= ring.length;
+    cy /= ring.length;
+
+    // ângulo: usa o informado ou estima pela maior aresta
+    let angRad;
+    if (!angleDeg || !isFinite(angleDeg)) {
+        let maxLen = -1, bestAng = 0;
+        for (let i = 0; i < ring.length; i++) {
+            const [x1, y1] = ring[i];
+            const [x2, y2] = ring[(i + 1) % ring.length];
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const len = Math.hypot(dx, dy);
+            if (len > maxLen) {
+                maxLen = len;
+                bestAng = Math.atan2(dy, dx);
+            }
+        }
+        angRad = bestAng;
+    } else {
+        angRad = (Number(angleDeg) * Math.PI) / 180;
+    }
+
+    // base ortonormal: u = frente, v = profundidade (perpendicular)
+    const cosA = Math.cos(angRad);
+    const sinA = Math.sin(angRad);
+    const ux = cosA, uy = sinA;    // direção da frente
+    const vx = -sinA, vy = cosA;    // direção da profundidade
+
+    // leva todos os pontos para o frame local (F,P)
+    const local = ring.map(([x, y]) => {
+        const rx = x - cx;
+        const ry = y - cy;
+        const f = rx * ux + ry * uy; // coordenada ao longo da frente
+        const p = rx * vx + ry * vy; // coordenada ao longo da profundidade
+        return { f, p };
+    });
+
+    // mede frente/prof atuais nesse frame
+    let minF = +Infinity, maxF = -Infinity;
+    let minP = +Infinity, maxP = -Infinity;
+    for (const pt of local) {
+        if (pt.f < minF) minF = pt.f;
+        if (pt.f > maxF) maxF = pt.f;
+        if (pt.p < minP) minP = pt.p;
+        if (pt.p > maxP) maxP = pt.p;
+    }
+    const curFrente = maxF - minF;
+    const curProf = maxP - minP;
+    if (curFrente <= 0 || curProf <= 0) return false;
+
+    // fatores de escala apenas no frame local
+    const sF = nf / curFrente;   // escala na frente
+    const sP = np / curProf;     // escala na profundidade
+
+    // centro em F,P (para manter o centro fixo)
+    const cF = (minF + maxF) / 2;
+    const cP = (minP + maxP) / 2;
+
+    // aplica escala anisotrópica no frame local e volta p/ mundo
+    const newRing = local.map(({ f, p }) => {
+        const f2 = cF + (f - cF) * sF;
+        const p2 = cP + (p - cP) * sP;
+
+        // volta para XY
+        const rx = f2 * ux + p2 * vx;
+        const ry = f2 * uy + p2 * vy;
+        const x = cx + rx;
+        const y = cy + ry;
+        return [x, y];
+    });
+
+    // fecha polígono
+    newRing.push(newRing[0]);
+
+    try {
+        g.setCoordinates([newRing]);
+        feature.set("angle_deg", (angRad * 180) / Math.PI);
+        feature.changed?.();
+        return true;
+    } catch (e) {
+        console.error("[applyFrenteProfLocalScale] erro ao setar coords:", e);
+        return false;
+    }
 }
+
 
 
 // ---------------- Estilos
 const styleAoi = new Style({ stroke: new Stroke({ color: "#2c7be5", width: 2 }), fill: new Fill({ color: "rgba(44,123,229,0.05)" }) });
 const styleAV = new Style({ stroke: new Stroke({ color: "#007a4d", width: 2 }), fill: new Fill({ color: "rgba(65,214,134,0.45)" }) });
 const styleCorte = new Style({ stroke: new Stroke({ color: "#e11d48", width: 2 }), fill: new Fill({ color: "rgba(252,165,165,0.35)" }) });
-const styleRuaMask = new Style({ stroke: new Stroke({ color: "#9ca3af", width: 1 }), fill: new Fill({ color: "rgba(156,163,175,0.8)" }) }); // EXISTENTES: cinza cheio
+const styleRuaMask = new Style({ stroke: new Stroke({ color: "#9ca3af", width: 1 }), fill: new Fill({ color: "rgba(156,163,175,0.8)" }) });
 const styleRiosCL = new Style({ stroke: new Stroke({ color: "#2E86AB", width: 2 }) });
 const styleRiosFx = new Style({ stroke: new Stroke({ color: "#2E86AB", width: 2 }), fill: new Fill({ color: "rgba(46,134,171,0.25)" }) });
 const styleLTCL = new Style({ stroke: new Stroke({ color: "#A84300", width: 2 }) });
@@ -162,13 +323,8 @@ const styleFerFx = new Style({ stroke: new Stroke({ color: "#6D4C41", width: 2 }
 const styleLoteavel = new Style({ stroke: new Stroke({ color: "#FFB300", width: 2 }), fill: new Fill({ color: "rgba(255,213,79,0.22)" }) });
 
 // VIAS NOVAS — Áreas cinza e Eixos brancos
-const styleViasArea = new Style({
-    stroke: new Stroke({ color: "#9ca3af", width: 1 }),
-    fill: new Fill({ color: "rgba(156,163,175,0.8)" }),
-});
-const styleViasLineWhite = new Style({
-    stroke: new Stroke({ color: "#ffffff", width: 2 }),
-});
+const styleViasArea = new Style({ stroke: new Stroke({ color: "#9ca3af", width: 1 }), fill: new Fill({ color: "rgba(156,163,175,0.8)" }) });
+const styleViasLineWhite = new Style({ stroke: new Stroke({ color: "#ffffff", width: 2 }) });
 
 // QUARTEIRÕES: borda azul
 const styleQuartBorda = new Style({ stroke: new Stroke({ color: "#0ea5e9", width: 2 }), fill: null });
@@ -181,12 +337,7 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
         if (cached && cached.__res === resolution) return cached.styles;
 
         const styles = [];
-        styles.push(
-            new Style({
-                stroke: new Stroke({ color: strokeColor, width: 1.5 }),
-                fill: new Fill({ color: fillColor }),
-            })
-        );
+        styles.push(new Style({ stroke: new Stroke({ color: strokeColor, width: 1.5 }), fill: new Fill({ color: fillColor }) }));
 
         const props = feature.getProperties?.() || {};
         const lotNumber = props.lot_number ?? props.lotNumber ?? props.id;
@@ -195,7 +346,9 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
         const cornerLonLat = props.label_corner;
 
         const areaLabel = Number.isFinite(areaM2)
-            ? (areaM2 >= 1e4 ? `${(areaM2 / 1e4).toFixed(2)} ha` : `${Math.round(areaM2).toLocaleString("pt-BR")} m²`)
+            ? areaM2 >= 1e4
+                ? `${(areaM2 / 1e4).toFixed(2)} ha`
+                : `${Math.round(areaM2).toLocaleString("pt-BR")} m²`
             : "";
 
         if (centerLonLat && centerLonLat.length === 2 && areaLabel) {
@@ -237,7 +390,6 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
         return styles;
     };
 }
-
 const styleLoteFill = makeLoteStyle({
     strokeColor: "#f59e0b",
     fillColor: "rgba(255, 213, 79, 0.35)",
@@ -245,10 +397,13 @@ const styleLoteFill = makeLoteStyle({
     haloColor: "rgba(255,255,255,0.95)",
 });
 
-// CALÇADAS: brancas inteiras
-const styleCalcada = new Style({
-    stroke: new Stroke({ color: "#e5e7eb", width: 1 }),
-    fill: new Fill({ color: "rgba(255,255,255,1)" }),
+// CALÇADAS
+const styleCalcada = new Style({ stroke: new Stroke({ color: "#e5e7eb", width: 1 }), fill: new Fill({ color: "rgba(255,255,255,1)" }) });
+
+// SELEÇÃO
+const styleSelected = new Style({
+    stroke: new Stroke({ color: "#22c55e", width: 3 }),
+    fill: new Fill({ color: "rgba(34,197,94,0.12)" }),
 });
 
 // ---------------- Component
@@ -261,76 +416,38 @@ export default function Parcelamento() {
 
     const baseLayersRef = useRef({});
     const layersRef = useRef({
-        aoi: null, loteavel: null, av: null, corte: null,
+        aoi: null,
+        loteavel: null,
+        av: null,
+        corte: null,
         ruas_mask: null,
-        rios_centerline: null, rios_faixa: null,
-        lt_centerline: null, lt_faixa: null,
-        ferrovias_centerline: null, ferrovias_faixa: null,
+        rios_centerline: null,
+        rios_faixa: null,
+        lt_centerline: null,
+        lt_faixa: null,
+        ferrovias_centerline: null,
+        ferrovias_faixa: null,
 
         // prévia
-        prev_vias_area: null,      // áreas cinza
-        prev_vias_line: null,      // eixo branco
+        prev_vias_area: null,
+        prev_vias_line: null,
         prev_quarteiroes: null,
         prev_lotes: null,
         calcadas: null,
 
         // oficiais
-        ofc_vias_area: null,       // áreas cinza
-        ofc_vias_line: null,       // eixo branco
+        ofc_vias_area: null,
+        ofc_vias_line: null,
         ofc_quarteiroes: null,
         ofc_lotes: null,
 
         guia: null,
     });
 
-    // ---- Z-INDEX BOOST helpers ----
-    const defaultZRef = useRef({});
-    const ACTIVE_Z = 999; // z-index quando o modo está focado
-
-    const captureDefaultZ = () => {
-        if (Object.keys(defaultZRef.current).length) return;
-        Object.entries(layersRef.current).forEach(([k, lyr]) => {
-            if (lyr && typeof lyr.getZIndex === "function") {
-                defaultZRef.current[k] = lyr.getZIndex() ?? 0;
-            }
-        });
-    };
-    const resetAllZ = () => {
-        Object.entries(layersRef.current).forEach(([k, lyr]) => {
-            if (lyr && typeof lyr.setZIndex === "function") {
-                lyr.setZIndex(defaultZRef.current[k] ?? 0);
-            }
-        });
-    };
-    const boostLayers = (keys = []) => {
-        keys.forEach((k) => {
-            const lyr = layersRef.current[k];
-            if (lyr && typeof lyr.setZIndex === "function") {
-                lyr.setZIndex(ACTIVE_Z);
-            }
-        });
-    };
-    const layersForMode = (mode) => {
-        switch (mode) {
-            case "aoi": return ["aoi"];
-            case "av": return ["av"];
-            case "corte": return ["corte"];
-            case "loteavel": return ["loteavel"];
-            case "rua_mask": return ["ruas_mask"];
-            case "guia": return ["guia"];
-            case "quarteiroes": return ["prev_quarteiroes"];
-            case "lotes": return ["prev_lotes"];
-            case "calcadas": return ["calcadas"];
-            case "vias_area": return ["prev_vias_area", "prev_vias_line"];
-            default: return [];
-        }
-    };
-
     const selectRef = useRef(null);
     const modifyRef = useRef(null);
     const translateRef = useRef(null);
     const snapRefs = useRef([]);
-    const drawGuideRef = useRef(null);
     const drawRef = useRef(null);
 
     const [projetos, setProjetos] = useState([]);
@@ -340,22 +457,24 @@ export default function Parcelamento() {
     const [geo, setGeo] = useState(null);
 
     const [planoId, setPlanoId] = useState(null);
-    const [parcelOficial, setParcelOficial] = useState({ vias_area: null, vias: null, quarteiroes: null, lotes: null, calcadas: null });
+    const [parcelOficial, setParcelOficial] = useState({
+        vias_area: null,
+        vias: null,
+        quarteiroes: null,
+        lotes: null,
+        calcadas: null,
+    });
 
-    const [editTarget, setEditTarget] = useState("none"); // none|aoi|av|corte|loteavel|rua_mask|guia|quarteiroes|lotes|calcadas|vias_area
-    const [measureMode, setMeasureMode] = useState("none"); // none|distance|area
+    // estado da seleção -> para o painel
+    const [selState, setSelState] = useState({
+        count: 0,
+        kind: null, // "lote" | "quarteirao" | "aoi"
+        angle: 0,
+        frente: "",
+        prof: "",
+    });
 
-    // ===== Medição helpers =====
-    function formatLength(geom) {
-        const len = sphereLength(geom, { projection: "EPSG:3857" });
-        return len > 1000 ? `${(len / 1000).toFixed(2)} km` : `${len.toFixed(2)} m`;
-    }
-    function formatArea(geom) {
-        const area = sphereArea(geom, { projection: "EPSG:3857" });
-        if (area > 1e6) return `${(area / 1e6).toFixed(2)} km²`;
-        if (area > 1e4) return `${(area / 1e4).toFixed(2)} ha`;
-        return `${area.toFixed(2)} m²`;
-    }
+
 
     // ---------------- Init Mapa ----------------
     useEffect(() => {
@@ -399,8 +518,8 @@ export default function Parcelamento() {
         L.ferrovias_faixa = mkVec(597, styleFerFx);
 
         // prévias
-        L.prev_vias_area = mkVec(609, styleViasArea);      // CINZA
-        L.prev_vias_line = mkVec(610, styleViasLineWhite); // BRANCO (eixo)
+        L.prev_vias_area = mkVec(609, styleViasArea);
+        L.prev_vias_line = mkVec(610, styleViasLineWhite);
         L.prev_quarteiroes = mkVec(611, styleQuartBorda);
         L.prev_lotes = new VectorLayer({
             zIndex: 612,
@@ -416,8 +535,8 @@ export default function Parcelamento() {
         });
 
         // oficiais
-        L.ofc_vias_area = mkVec(613, styleViasArea);       // CINZA
-        L.ofc_vias_line = mkVec(614, styleViasLineWhite);  // BRANCO
+        L.ofc_vias_area = mkVec(613, styleViasArea);
+        L.ofc_vias_line = mkVec(614, styleViasLineWhite);
         L.ofc_quarteiroes = mkVec(615, new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: null }));
         L.ofc_lotes = new VectorLayer({
             zIndex: 616,
@@ -447,188 +566,194 @@ export default function Parcelamento() {
             layers: [...Object.values(bases), ...Object.values(L)],
             view: new View({ center: fromLonLat([-55, -14]), zoom: 4, maxZoom: 22 }),
             controls: defaultControls({ attribution: true }).extend([
-                new Zoom(), new Rotate(), new FullScreen(), new ScaleLine(),
-                new MousePosition({ coordinateFormat: createStringXY(5), projection: "EPSG:4326", className: "mousepos bg-white/80 px-2 py-1 rounded text-xs" }),
+                new Zoom(),
+                new Rotate(),
+                new FullScreen(),
+                new ScaleLine(),
+                new MousePosition({
+                    coordinateFormat: createStringXY(5),
+                    projection: "EPSG:4326",
+                    className: "mousepos bg-white/80 px-2 py-1 rounded text-xs",
+                }),
                 new Attribution(),
             ]),
         });
 
-        // captura z-index padrão (uma vez)
-        captureDefaultZ();
+        // ---- Interações (seleção/edição/desenho) ----
+        const recreateInteractions = (mode) => {
+            const map = mapRef.current;
+            if (!map) return;
 
-        // --- Interações recriáveis por modo ---
-        const buildLayerFilter = (mode) => {
+            if (selectRef.current) map.removeInteraction(selectRef.current);
+            if (modifyRef.current) map.removeInteraction(modifyRef.current);
+            if (translateRef.current) map.removeInteraction(translateRef.current);
+            if (drawRef.current) {
+                map.removeInteraction(drawRef.current);
+                drawRef.current = null;
+            }
+            snapRefs.current.forEach((s) => map.removeInteraction(s));
+            snapRefs.current = [];
+
+            // filtro: editar apenas prévias (quarteirões e lotes) + aoi para conveniência
             const Lx = layersRef.current;
             const allowPreview = (lyr) =>
                 lyr === Lx.prev_vias_area || lyr === Lx.prev_vias_line || lyr === Lx.prev_quarteiroes || lyr === Lx.prev_lotes;
-            if (mode === "none") return (lyr) => allowPreview(lyr) || lyr === Lx.guia || lyr === Lx.ruas_mask;
-            if (mode === "aoi") return (lyr) => allowPreview(lyr) || lyr === Lx.aoi || lyr === Lx.guia || lyr === Lx.ruas_mask;
-            if (mode === "av") return (lyr) => allowPreview(lyr) || lyr === Lx.av || lyr === Lx.guia || lyr === Lx.ruas_mask;
-            if (mode === "corte") return (lyr) => allowPreview(lyr) || lyr === Lx.corte || lyr === Lx.guia || lyr === Lx.ruas_mask;
-            if (mode === "loteavel") return (lyr) => allowPreview(lyr) || lyr === Lx.loteavel || lyr === Lx.guia || lyr === Lx.ruas_mask;
-            if (mode === "rua_mask") return (lyr) => allowPreview(lyr) || lyr === Lx.ruas_mask || lyr === Lx.guia;
-            if (mode === "guia") return (lyr) => lyr === Lx.guia || allowPreview(lyr);
-            if (mode === "quarteiroes") return (lyr) => lyr === Lx.prev_quarteiroes;
-            if (mode === "lotes") return (lyr) => lyr === Lx.prev_lotes;
-            if (mode === "calcadas") return (lyr) => lyr === Lx.calcadas;
-            if (mode === "vias_area") return (lyr) => lyr === Lx.prev_vias_area || lyr === Lx.ofc_vias_area || lyr === Lx.prev_vias_line || lyr === Lx.ofc_vias_line;
-            return (lyr) => allowPreview(lyr) || lyr === Lx.guia || lyr === Lx.ruas_mask;
-        };
-
-        const recreateInteractions = (mode) => {
-            if (selectRef.current) mapRef.current.removeInteraction(selectRef.current);
-            if (modifyRef.current) mapRef.current.removeInteraction(modifyRef.current);
-            if (translateRef.current) mapRef.current.removeInteraction(translateRef.current);
-
-            // ======= DRAW =======
-            if (drawRef.current) {
-                mapRef.current.removeInteraction(drawRef.current);
-                drawRef.current = null;
-            }
-
-            // define tipo de desenho conforme modo
-            let drawType = null;
-            let drawSource = null;
-
-            switch (mode) {
-                case "aoi":
-                case "av":
-                case "corte":
-                case "loteavel":
-                case "rua_mask":
-                case "calcadas":
-                case "quarteiroes":
-                case "lotes":
-                    drawType = "Polygon";
-                    break;
-                case "vias_area":
-                case "guia":
-                    drawType = "LineString";
-                    break;
-                default:
-                    drawType = null;
-            }
-
-            if (drawType) {
-                const Lx = layersRef.current;
-                const layerKey = layersForMode(mode)?.[0]; // pega camada principal do modo
-                drawSource = Lx[layerKey]?.getSource?.();
-
-                if (drawSource) {
-                    const draw = new Draw({
-                        source: drawSource,
-                        type: drawType,
-                        style: new Style({
-                            stroke: new Stroke({ color: "#2563eb", width: 2 }),
-                            fill: new Fill({ color: "rgba(37,99,235,0.15)" }),
-                            image: new CircleStyle({
-                                radius: 4,
-                                fill: new Fill({ color: "#2563eb" }),
-                            }),
-                        }),
-                    });
-
-                    draw.on("drawend", (evt) => {
-                        const feat = evt.feature;
-                        // define ID incremental básico
-                        const src = drawSource;
-                        feat.setProperties({ id: src.getFeatures().length });
-                    });
-
-                    mapRef.current.addInteraction(draw);
-                    drawRef.current = draw;
-                }
-            }
-
-
-            snapRefs.current.forEach((s) => mapRef.current.removeInteraction(s));
-            snapRefs.current = [];
-
-            if (drawGuideRef.current) {
-                mapRef.current.removeInteraction(drawGuideRef.current);
-                drawGuideRef.current = null;
-            }
+            const layersFilter = (lyr) => allowPreview(lyr) || lyr === Lx.aoi;
 
             selectRef.current = new Select({
                 condition: clickSelectCondition,
                 hitTolerance: 12,
-                multi: true,
-                layers: buildLayerFilter(mode),
-                style: null,
+                multi: false,
+                layers: layersFilter,
+                style: styleSelected, // seleção verde translúcida
             });
-            mapRef.current.addInteraction(selectRef.current);
+            map.addInteraction(selectRef.current);
 
-            // seleção exclusiva (um por vez)
+            // Atualiza selState ao selecionar
             selectRef.current.on("select", (evt) => {
-                const sel = selectRef.current.getFeatures();
-                if (evt.selected && evt.selected.length) {
-                    sel.clear();
-                    sel.push(evt.selected[evt.selected.length - 1]);
+                const f = evt.selected?.[0] || null;
+                if (!f) {
+                    setSelState({ count: 0, kind: null, angle: 0, frente: "", prof: "" });
+                    return;
                 }
+                const g = f.getGeometry?.();
+                const kindGuess = f.get("kind") || (g?.getType?.() === "Polygon" ? "lote" : "quarteirao");
+
+                const angleDegProp = f.get("angle_deg"); // pode ser undefined
+                const m = g ? measureFrenteProfAlongAngle(g, angleDegProp) : { frente: 0, prof: 0 };
+
+                setSelState({
+                    count: 1,
+                    kind: kindGuess,
+                    angle: angleDegProp || 0,
+                    frente: (m.frente || 0).toFixed(2),
+                    prof: (m.prof || 0).toFixed(2),
+                });
             });
 
+
+            // Modify
             modifyRef.current = new Modify({
                 features: selectRef.current.getFeatures(),
                 pixelTolerance: 10,
+                condition: primaryAction,
+                insertVertexCondition: altKeyOnly, // Alt+click adiciona vértice
+                deleteCondition: platformModifierKeyOnly, // Ctrl/Cmd+click remove vértice
                 style: new Style({
                     image: new CircleStyle({ radius: 6, fill: new Fill({ color: "#fff" }), stroke: new Stroke({ color: "#0ea5e9", width: 2 }) }),
                     stroke: new Stroke({ color: "#0ea5e9", width: 2 }),
                 }),
-                deleteCondition: (e) => shiftKeyOnly(e),
-                insertVertexCondition: (e) => altKeyOnly(e),
             });
-            mapRef.current.addInteraction(modifyRef.current);
+            map.addInteraction(modifyRef.current);
 
-            translateRef.current = new Translate({ features: selectRef.current.getFeatures(), condition: shiftKeyOnly });
-            mapRef.current.addInteraction(translateRef.current);
-
-            // SNAP com prioridade para camadas focadas
-            const Lx = layersRef.current;
-            const focusKeys = layersForMode(mode);
-            const focusLayers = focusKeys.map(k => Lx[k]).filter(Boolean);
-
-            const allLayers = [
-                Lx.prev_vias_area, Lx.prev_vias_line, Lx.prev_quarteiroes, Lx.prev_lotes, Lx.guia,
-                Lx.aoi, Lx.av, Lx.corte, Lx.loteavel, Lx.ruas_mask,
-                Lx.rios_centerline, Lx.rios_faixa, Lx.lt_centerline, Lx.lt_faixa,
-                Lx.ferrovias_centerline, Lx.ferrovias_faixa, Lx.calcadas,
-                Lx.ofc_vias_area, Lx.ofc_vias_line,
-            ].filter(Boolean);
-
-            const restLayers = allLayers.filter(lyr => !focusLayers.includes(lyr));
-            const ordered = [...focusLayers, ...restLayers];
-
-            ordered.forEach((lyr) => {
-                const s = new Snap({ source: lyr.getSource() });
-                mapRef.current.addInteraction(s);
-                snapRefs.current.push(s);
+            // Translate (Shift para mover tudo)
+            translateRef.current = new Translate({
+                features: selectRef.current.getFeatures(),
+                condition: (e) => !!e.originalEvent?.shiftKey,
             });
+            map.addInteraction(translateRef.current);
+
+            // Draw (lotes/quarteiroes)
+            if (mode === "lotes" || mode === "quarteiroes") {
+                const target = mode === "lotes" ? Lx.prev_lotes : Lx.prev_quarteiroes;
+                const draw = new Draw({
+                    source: target.getSource(),
+                    type: "Polygon",
+                    condition: noModifierKeys, // desenha só sem modificadores
+                    style: new Style({
+                        stroke: new Stroke({ color: "#2563eb", width: 2 }),
+                        fill: new Fill({ color: "rgba(37,99,235,0.15)" }),
+                        image: new CircleStyle({ radius: 4, fill: new Fill({ color: "#2563eb" }) }),
+                    }),
+                    stopClick: true,
+                });
+                draw.on("drawend", (evt) => {
+                    const feat = evt.feature;
+                    feat.setProperties({ id: target.getSource().getFeatures().length });
+                });
+                map.addInteraction(draw);
+                drawRef.current = draw;
+            }
+
+
+            // Snap
+            [Lx.prev_lotes, Lx.prev_quarteiroes, Lx.aoi, Lx.prev_vias_area, Lx.prev_vias_line, Lx.calcadas]
+                .filter(Boolean)
+                .forEach((lyr) => {
+                    const s = new Snap({ source: lyr.getSource() });
+                    map.addInteraction(s);
+                    snapRefs.current.push(s);
+                });
         };
 
         mapRef.current.__recreateInteractions = recreateInteractions;
         recreateInteractions("none");
 
-        // Delete/Backspace remove feições selecionadas
-        const onKeyDownDelete = (ev) => {
+        // Delete/Backspace remove feições selecionadas (fora de inputs)
+        const onKeyDownGlobal = (ev) => {
+            const tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toLowerCase() : "";
+            const typing = tag === "input" || tag === "textarea" || (ev.target && ev.target.isContentEditable);
+            if (typing) return;
+
+            const map = mapRef.current;
+
+            // ===== ENTER finaliza desenho atual =====
+            if (ev.key === "Enter") {
+                if (drawRef.current) {
+                    ev.preventDefault();
+                    try {
+                        drawRef.current.finishDrawing();
+                    } catch (e) {
+                        console.error("[finishDrawing] erro:", e);
+                    }
+                    return;
+                }
+            }
+
+            // ===== ESC / Delete / Backspace: SAIR DO MODO DESENHO (se estiver desenhando) =====
+            if (ev.key === "Escape" || ev.key === "Backspace" || ev.key === "Delete") {
+                if (drawRef.current && map) {
+                    ev.preventDefault();
+                    try {
+                        // cancela qualquer desenho em andamento
+                        drawRef.current.abortDrawing?.();
+                    } catch (e) {
+                        console.error("[abortDrawing] erro:", e);
+                    }
+
+                    // MUITO IMPORTANTE: remover a interação do mapa
+                    map.removeInteraction(drawRef.current);
+                    drawRef.current = null;
+
+                    // volta para modo normal (sem desenho)
+                    setEditTarget("none");
+                    return;
+                }
+            }
+
+            // ===== Delete / Backspace: apagar seleção (quando NÃO está desenhando) =====
             if (ev.key !== "Delete" && ev.key !== "Backspace") return;
+
             const sel = selectRef.current?.getFeatures?.();
             if (!sel || sel.getLength() === 0) return;
+            const L = layersRef.current;
             sel.forEach((f) => {
-                Object.values(layersRef.current).forEach((lyr) => {
-                    if (lyr?.getSource?.()?.hasFeature?.(f)) {
-                        lyr.getSource().removeFeature(f);
-                    }
+                [L.prev_lotes.getSource(), L.prev_quarteiroes.getSource(), L.aoi.getSource()].forEach((s) => {
+                    if (s.hasFeature(f)) s.removeFeature(f);
                 });
             });
             sel.clear();
+            setSelState({ count: 0, kind: null, angle: 0, frente: "", prof: "" });
         };
-        window.addEventListener("keydown", onKeyDownDelete);
+
+        window.addEventListener("keydown", onKeyDownGlobal);
 
         return () => {
-            window.removeEventListener("keydown", onKeyDownDelete);
+            window.removeEventListener("keydown", onKeyDownGlobal);
             mapRef.current?.setTarget(null);
             mapRef.current = null;
         };
+
     }, []);
 
     // alterna base
@@ -640,13 +765,10 @@ export default function Parcelamento() {
         });
     }, [baseSel]);
 
-    // muda o modo de edição → recria interações e aplica z-index boost
+    // modo de edição → recria interações
+    const [editTarget, setEditTarget] = useState("none"); // none|lotes|quarteiroes
     useEffect(() => {
-        // recria interações
         mapRef.current?.__recreateInteractions?.(editTarget);
-        // aplica z-index boost
-        resetAllZ();
-        boostLayers(layersForMode(editTarget));
         try { mapRef.current?.renderSync?.(); } catch { }
     }, [editTarget]);
 
@@ -708,10 +830,13 @@ export default function Parcelamento() {
         const L = layersRef.current;
         if (!mapRef.current) return;
 
-        setLayerData(L.aoi, (geo?.aoi || geo?.aoi_snapshot) && {
-            type: "FeatureCollection",
-            features: [{ type: "Feature", properties: {}, geometry: geo?.aoi || geo?.aoi_snapshot }],
-        });
+        setLayerData(
+            L.aoi,
+            (geo?.aoi || geo?.aoi_snapshot) && {
+                type: "FeatureCollection",
+                features: [{ type: "Feature", properties: {}, geometry: geo?.aoi || geo?.aoi_snapshot }],
+            }
+        );
         setLayerData(L.av, toFC(geo?.av), styleAV);
         setLayerData(L.corte, toFC(geo?.corte_av), styleCorte);
         setLayerData(L.ruas_mask, toFC(geo?.ruas_mask), styleRuaMask);
@@ -745,12 +870,16 @@ export default function Parcelamento() {
         setLayerData(L.ofc_vias_area, toFC(parcelOficial.vias_area), styleViasArea);
         setLayerData(L.ofc_vias_line, toFC(parcelOficial.vias), styleViasLineWhite);
         setLayerData(L.ofc_quarteiroes, toFC(parcelOficial.quarteiroes), new Style({ stroke: new Stroke({ color: "#7c3aed", width: 2 }), fill: null }));
-        setLayerData(L.ofc_lotes, toFC(parcelOficial.lotes), makeLoteStyle({
-            strokeColor: "#7c3aed",
-            fillColor: "rgba(124,58,237,0.18)",
-            textColor: "#1f2937",
-            haloColor: "rgba(255,255,255,0.95)",
-        }));
+        setLayerData(
+            L.ofc_lotes,
+            toFC(parcelOficial.lotes),
+            makeLoteStyle({
+                strokeColor: "#7c3aed",
+                fillColor: "rgba(124,58,237,0.18)",
+                textColor: "#1f2937",
+                haloColor: "rgba(255,255,255,0.95)",
+            })
+        );
         setLayerData(layersRef.current.calcadas, toFC(parcelOficial.calcadas), styleCalcada);
     }, [parcelOficial]);
 
@@ -767,35 +896,78 @@ export default function Parcelamento() {
         };
     }, [geo, layersRef.current.guia?.getSource()?.getRevision?.()]);
 
-    // ------ desenhar linha-guia ------
-    const startGuideDraw = () => {
-        if (!mapRef.current) return;
-        if (drawGuideRef.current) {
-            mapRef.current.removeInteraction(drawGuideRef.current);
-            drawGuideRef.current = null;
-        }
-        const draw = new Draw({
-            source: layersRef.current.guia.getSource(),
-            type: "LineString",
-            style: new Style({
-                stroke: new Stroke({ color: "#f59e0b", width: 2 }),
-                image: new CircleStyle({ radius: 4, fill: new Fill({ color: "#f59e0b" }) })
-            }),
-        });
-        draw.on("drawend", () => {
-            if (drawGuideRef.current) {
-                mapRef.current.removeInteraction(drawGuideRef.current);
-                drawGuideRef.current = null;
+    // ------ ações de edição vindas do painel ------
+    const handleApplyFrenteProf = (angleDeg, frenteNum, profNum) => {
+        const sel = selectRef.current?.getFeatures?.();
+        if (!sel || sel.getLength() !== 1) return;
+        const f = sel.item(0);
+
+        const nFrente = Number(frenteNum);
+        const nProf = Number(profNum);
+
+        if (!isFinite(nFrente) || nFrente <= 0 || !isFinite(nProf) || nProf <= 0) return;
+
+        const ok = applyFrenteProfLocalScale(
+            f,
+            typeof angleDeg === "number" && isFinite(angleDeg) ? angleDeg : null,
+            nFrente,
+            nProf
+        );
+
+        if (ok) {
+            try { mapRef.current.renderSync(); } catch { }
+
+            const g = f.getGeometry?.();
+            if (g) {
+                const usedAngle = f.get("angle_deg");
+                const m = measureFrenteProfAlongAngle(g, usedAngle);
+                setSelState((s) => ({
+                    ...s,
+                    angle: usedAngle || 0,
+                    frente: (m.frente || 0).toFixed(2),
+                    prof: (m.prof || 0).toFixed(2),
+                }));
             }
-            setEditTarget("guia");
-            mapRef.current?.__recreateInteractions?.("guia");
-        });
-        drawGuideRef.current = draw;
-        mapRef.current.addInteraction(draw);
-        setEditTarget("guia");
+        }
     };
 
-    // ------ botão Recalcular (usa camada de lotes da PRÉVIA) ------
+    const handleRotate = (angleDeg) => {
+        const sel = selectRef.current?.getFeatures?.();
+        if (!sel || sel.getLength() !== 1) return false;
+        const f = sel.item(0);
+        const g = f.getGeometry?.();
+        if (!g) return false;
+        const [cx, cy] = getCenter(g.getExtent());
+        g.rotate((Number(angleDeg) * Math.PI) / 180, [cx, cy]);
+        f.set("angle_deg", Number(angleDeg) || 0);
+        f.changed?.();
+        try { mapRef.current.renderSync(); } catch { }
+        const m = measureFrenteProfAlongAngle(g, Number(angleDeg) || 0);
+        setSelState((s) => ({
+            ...s,
+            angle: Number(angleDeg) || 0,
+            frente: (m.frente || 0).toFixed(2),
+            prof: (m.prof || 0).toFixed(2),
+        }));
+        return true;
+    };
+
+    const handleDeleteSelection = () => {
+        const sel = selectRef.current?.getFeatures?.();
+        if (!sel || sel.getLength() === 0) return false;
+        const L = layersRef.current;
+        sel.forEach((f) => {
+            [L.prev_lotes.getSource(), L.prev_quarteiroes.getSource(), L.aoi.getSource()].forEach((s) => {
+                if (s.hasFeature(f)) s.removeFeature(f);
+            });
+        });
+        sel.clear();
+        setSelState({ count: 0, kind: null, angle: 0, frente: "", prof: "" });
+
+        return true;
+    };
+
+    // ------ botão Recalcular (usa lotes da PRÉVIA) ------
     const [isRecalc, setIsRecalc] = useState(false);
     const handleRecalcular = async () => {
         if (!planoId) { alert("Plano não definido."); return; }
@@ -810,7 +982,6 @@ export default function Parcelamento() {
             const { data } = await axiosAuth.post(`/parcelamento/planos/${planoId}/recalcular/`, {
                 lotes_fc, renumerar: true,
             });
-            // atualiza LOTES com props recalculadas
             setLayerData(L.prev_lotes, toFC(data?.lotes), makeLoteStyle({
                 strokeColor: "#f59e0b",
                 fillColor: "rgba(255, 213, 79, 0.35)",
@@ -820,14 +991,12 @@ export default function Parcelamento() {
         } catch (e) {
             console.error("[recalcular] erro:", e?.response?.data || e?.message || e);
             alert("Erro ao recalcular. Veja o console.");
-        } finally {
-            setIsRecalc(false);
-        }
+        } finally { setIsRecalc(false); }
     };
 
     return (
         <div className="w-full h-full relative">
-            {/* Topo: selects + base + modos de edição + medição */}
+            {/* Topo */}
             <div className="absolute z-[1000] top-2 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur rounded-xl shadow p-3 flex flex-wrap gap-2 items-center">
                 <select className="border p-2 rounded min-w-[260px]" value={projetoSel || ""} onChange={(e) => setProjetoSel(Number(e.target.value) || "")}>
                     <option value="">Selecione um projeto…</option>
@@ -843,12 +1012,7 @@ export default function Parcelamento() {
                     ))}
                 </select>
 
-                <select
-                    className="border p-2 rounded"
-                    value={baseSel}
-                    onChange={(e) => setBaseSel(e.target.value)}
-                    title="Mapa base"
-                >
+                <select className="border p-2 rounded" value={baseSel} onChange={(e) => setBaseSel(e.target.value)} title="Mapa base">
                     {token && <option value="mapbox-hibrido">Mapbox Híbrido</option>}
                     {token && <option value="mapbox-ruas">Mapbox Ruas</option>}
                     {token && <option value="mapbox-sat">Mapbox Satélite</option>}
@@ -860,76 +1024,57 @@ export default function Parcelamento() {
                 <div className="flex gap-1 ml-2">
                     <span className="text-xs mr-1 opacity-70">Editar:</span>
                     <button className={`border px-2 py-1 rounded ${editTarget === "none" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("none")}>Prévia</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "aoi" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("aoi")}>AOI</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "av" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("av")}>Área Verde</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "corte" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("corte")}>Corte</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "loteavel" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("loteavel")}>Loteável</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "rua_mask" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("rua_mask")}>Ruas (existentes)</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "vias_area" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("vias_area")}>Ruas (criadas)</button>
                     <button className={`border px-2 py-1 rounded ${editTarget === "quarteiroes" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("quarteiroes")}>Quarteirões</button>
                     <button className={`border px-2 py-1 rounded ${editTarget === "lotes" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("lotes")}>Lotes</button>
-                    <button className={`border px-2 py-1 rounded ${editTarget === "calcadas" ? "bg-slate-800 text-white" : "bg-white"}`} onClick={() => setEditTarget("calcadas")}>Calçadas</button>
-                    {/* Guia */}
-                    <button className={`border px-2 py-1 rounded ${editTarget === "guia" ? "bg-amber-500 text-white" : "bg-white"}`} onClick={() => setEditTarget("guia")} title="Editar linha-guia">Guia</button>
-                    <button className="border px-2 py-1 rounded bg-amber-100 hover:bg-amber-200" onClick={startGuideDraw} title="Desenhar nova linha-guia">➕ Desenhar guia</button>
-                </div>
-
-                {/* Medição */}
-                <div className="flex gap-1 ml-2">
-                    <span className="text-xs mr-1 opacity-70">Medir:</span>
-                    <button
-                        className={`border px-2 py-1 rounded ${measureMode === "distance" ? "bg-slate-800 text-white" : "bg-white"}`}
-                        onClick={() => setMeasureMode(m => m === "distance" ? "none" : "distance")}
-                        title="Medição de distância (linha)"
-                    >
-                        Distância
-                    </button>
-                    <button
-                        className={`border px-2 py-1 rounded ${measureMode === "area" ? "bg-slate-800 text-white" : "bg-white"}`}
-                        onClick={() => setMeasureMode(m => m === "area" ? "none" : "area")}
-                        title="Medição de área (polígono)"
-                    >
-                        Área
-                    </button>
                 </div>
 
                 {/* Recalcular */}
                 <div className="flex gap-1 ml-2">
-                    <button className="border px-3 py-1 rounded bg-white hover:bg-slate-100"
-                        onClick={handleRecalcular} disabled={isRecalc || !planoId}>
+                    <button className="border px-3 py-1 rounded bg-white hover:bg-slate-100" onClick={handleRecalcular} disabled={isRecalc || !planoId}>
                         {isRecalc ? "⏳ Recalculando..." : "Recalcular lotes"}
                     </button>
                 </div>
-
-                <button
-                    className={`border px-2 py-1 rounded ${editTarget === "lotes" ? "bg-slate-800 text-white" : "bg-white"}`}
-                    onClick={() => setEditTarget("lotes")}
-                >
-                    🟨 Desenhar lotes
-                </button>
-
             </div>
 
+            {/* Badge das medidas atuais */}
+            <div className="absolute z-[1000] bottom-10 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[420px]">
+                {/* Badge das medidas atuais */}
+                {(selState?.kind === "lote" || selState?.kind === "quarteirao") && (
+                    <div className="mb-2 inline-flex items-center gap-2 text-[11px] px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+                        <span className="font-medium">Medidas atuais:</span>
+                        <span>Frente {selState?.frente ?? "-"} m</span>
+                        <span>•</span>
+                        <span>Profundidade {selState?.prof ?? "-"} m</span>
+                    </div>
+                )}
+
+                <h3 className="font-semibold mb-2">Parcelamento (Prévia Editável)</h3>
+                ...
+            </div>
+
+
+
+
             {/* Painel parcelamento */}
-            <div className="absolute z-[1000] bottom-10 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[380px]">
-                <h3 className="font-semibold mb-2">Parcelamento</h3>
+            <div className="absolute z-[1000] bottom-10 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[420px]">
+                <h3 className="font-semibold mb-2">Parcelamento (Prévia Editável)</h3>
                 <ParcelamentoPanel
                     map={mapRef.current}
                     planoId={planoId}
                     alFeature={geo?.area_loteavel?.features?.[0] || (geo?.aoi && { type: "Feature", geometry: geo?.aoi, properties: {} })}
                     onPreview={(data) => {
                         const L = layersRef.current;
-                        setLayerData(L.prev_vias_area, toFC(data?.vias_area), styleViasArea);   // áreas cinza criadas
-                        setLayerData(L.prev_vias_line, toFC(data?.vias), styleViasLineWhite);  // EIXOS (linhas) da prévia
+                        setLayerData(L.prev_vias_area, toFC(data?.vias_area), styleViasArea);
+                        setLayerData(L.prev_vias_line, toFC(data?.vias), styleViasLineWhite);
                         setLayerData(L.prev_quarteiroes, toFC(data?.quarteiroes), styleQuartBorda);
-                        setLayerData(L.prev_lotes, toFC(data?.lotes), styleLoteFill);          // amarelo + # + área
-                        setLayerData(L.calcadas, toFC(data?.calcadas), styleCalcada);          // brancas
+                        setLayerData(L.prev_lotes, toFC(data?.lotes), styleLoteFill);
+                        setLayerData(L.calcadas, toFC(data?.calcadas), styleCalcada);
                     }}
                     onMaterialize={async (versaoId) => {
                         const gjv = await getVersaoGeojson(versaoId);
                         setParcelOficial({
                             vias_area: gjv?.vias_area || null,
-                            vias: gjv?.vias || null,                      // eixos oficiais (linhas)
+                            vias: gjv?.vias || null,
                             quarteiroes: gjv?.quarteiroes || null,
                             lotes: gjv?.lotes || null,
                             calcadas: gjv?.calcadas || null,
@@ -942,10 +1087,18 @@ export default function Parcelamento() {
                         setLayerData(L.calcadas, { type: "FeatureCollection", features: [] }, styleCalcada);
                     }}
                     extraParams={extraParams}
+                    selState={selState}
+                    onApplyFrenteProf={handleApplyFrenteProf}
+                    onRotate={handleRotate}
+                    onDelete={handleDeleteSelection}
+                    editTarget={editTarget}
+                    onSetMode={(m) => setEditTarget(m)}
                 />
-                <div className="text-[11px] text-gray-600 mt-2">
-                    Edite com Select/Modify/Translate (nativos OL). <kbd>Shift</kbd> arrasta; <kbd>Shift+clique</kbd> remove; <kbd>Alt+clique</kbd> adiciona.<br />
-                    Use <b>Guia</b> ou <b>➕ Desenhar guia</b> para orientar os lotes quando não houver ruas próximas.
+                <div className="text-[11px] text-gray-600 mt-2 leading-5">
+                    <b>Finalizar desenho:</b> Duplo-clique • Ctrl/Cmd+clique<br />
+                    <b>Editar vértice:</b> Arraste • <b>ALT+clique</b> adiciona • <b>Ctrl/Cmd+clique</b> remove<br />
+                    <b>Mover polígono:</b> Segure <b>Shift</b> e arraste<br />
+                    <b>Delete</b>/<b>Backspace</b> apaga seleção (não apaga quando digitando nos inputs)
                 </div>
             </div>
 
