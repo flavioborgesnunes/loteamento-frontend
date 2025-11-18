@@ -15,6 +15,7 @@ import VisualizarProjetos from './pages/visualizar/VisualizarProjetos';
 import Parcelamento from './pages/parcelamento/Parcelamento'
 import GeomanLoteador from './pages/geoman/GeomanLoteador';
 import GerarQuarteirao from './pages/parcelamento/GerarQuarteirao';
+import ParcelamentoIA from './pages/parcelamento/ParcelamentoIA';
 
 
 function App() {
@@ -37,6 +38,7 @@ function App() {
           <Route path="/loteador" element={<GeomanLoteador />} />
           <Route path="/visualizar-projetos" element={<VisualizarProjetos />} />
           <Route path="/parcelamento" element={<Parcelamento />} />
+          <Route path="/ia-parcelamento" element={<ParcelamentoIA />} />
           <Route path="/parcelamento/gerar-quarteirao" element={<GerarQuarteirao />} />
           <Route path="/settings" element={<PerfilUsuario />} />
         </Route>
