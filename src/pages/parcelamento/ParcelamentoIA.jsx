@@ -408,7 +408,7 @@ function makeLoteStyle({ strokeColor, fillColor, textColor = "#111", haloColor =
         );
 
         const props = feature.getProperties?.() || {};
-        const lotNumber = props.lot_number ?? props.lotNumber ?? props.id;
+        const lotNumber = props.numero ?? props.lot_number
         const areaM2 = props.area_m2;
         const centerLonLat = props.label_center;
         const cornerLonLat = props.label_corner;

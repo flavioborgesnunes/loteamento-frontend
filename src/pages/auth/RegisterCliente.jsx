@@ -26,7 +26,7 @@ function RegisterCliente() {
             return;
         }
 
-        const { error } = await registerCliente(email, password, password2, 'dono');
+        const { error } = await registerCliente(email, password, password2);
 
         if (error) {
             const first = typeof error === 'string' ? error : Object.values(error)[0];

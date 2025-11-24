@@ -39,9 +39,17 @@ export const login = async (email, password) => {
 // Registro de cliente (dono)
 export const registerCliente = async (email, password, password2) => {
     try {
-        const payload = { email, password, password2, role: 'dono' };
+        const payload = {
+            email,
+            password,
+            password2,
+            role: 'dono', // Sempre dono
+        };
+
+        // Registro
         const { data } = await axios.post('user/register/', payload);
 
+        // Login automático após registrar
         await login(email, password);
 
         Toast.fire({
@@ -50,14 +58,17 @@ export const registerCliente = async (email, password, password2) => {
         });
 
         return { data, error: null };
+
     } catch (error) {
         console.log("Erro ao registrar cliente:", error.response?.data);
+
         return {
             data: null,
             error: error.response?.data || 'Erro ao registrar cliente',
         };
     }
 };
+
 
 // Registro de usuário interno
 export const registerUsuarioInterno = async (email, role) => {

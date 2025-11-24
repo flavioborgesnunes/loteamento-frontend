@@ -132,7 +132,7 @@ export default function ParcelamentoIAPanel({
 
     const labelSug = loadingSugestao ? "⏳ Pedindo sugestão..." : "✨ Sugerir parâmetros IA";
     const labelPrevIa = loadingPreviewIa ? "⏳ Pré-visualizando IA..." : "✨ Pré-visualizar com IA";
-    const labelSvg = loadingSvg ? "⏳ Gerando SVG..." : "SVG (IA)";
+    const labelSvg = loadingSvg ? "⏳ Gerando ..." : "(IA)";
 
     return (
         <div className="p-3 space-y-3">
@@ -228,6 +228,7 @@ export default function ParcelamentoIAPanel({
                 >
                     {labelSug}
                 </button>
+                <br />
                 <button
                     className="btn"
                     disabled={loadingPreviewIa}
