@@ -12,6 +12,9 @@ import L from "leaflet";
 import "leaflet-fullscreen";
 import "leaflet-fullscreen/dist/leaflet.fullscreen.css";
 
+import Swal from "sweetalert2";
+
+
 import "leaflet/dist/leaflet.css";
 import "@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css";
 import "@geoman-io/leaflet-geoman-free";
@@ -42,6 +45,23 @@ import "leaflet-fullscreen/dist/leaflet.fullscreen.css";
 
 const token = import.meta.env.VITE_MAPBOX_TOKEN?.trim();
 const DEBUG = true;
+
+const showAlert = (
+    text,
+    {
+        title = "Atenção",
+        icon = "warning", // 'success' | 'error' | 'info' | 'warning' | 'question'
+    } = {}
+) => {
+    Swal.fire({
+        title,
+        text,
+        icon,
+        confirmButtonColor: "#16a34a", // verdezinho Tailwind-like
+        confirmButtonText: "OK",
+    });
+};
+
 
 const newUid = () => (crypto?.randomUUID?.() || `m-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -179,9 +199,15 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                 if (drawMode === "manualPolygon") {
                     const name = (window.__manualName || "").trim();
                     if (!name) {
-                        alert("Informe um nome para a restrição.");
+                        showAlert("Informe um nome para a restrição.", {
+                            icon: "warning",
+                            title: "Nome obrigatório",
+                        });
                     } else if (!["Polygon", "MultiPolygon"].includes(gj.geometry?.type)) {
-                        alert("Geometria inválida para polígono manual.");
+                        showAlert("Geometria inválida para polígono manual.", {
+                            icon: "error",
+                            title: "Geometria inválida",
+                        });
                     } else {
                         const feat = {
                             type: "Feature",
@@ -200,7 +226,10 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                         const name = (window.__manualName || "").trim();
                         const radiusM = Number(window.__manualRadius || 0);
                         if (!name || !(radiusM > 0)) {
-                            alert("Nome/raio inválido.");
+                            showAlert("Nome/raio inválido.", {
+                                icon: "warning",
+                                title: "Dados inválidos",
+                            });
                         } else {
                             const center = layer.getLatLng();
                             const radiusKm = radiusM / 1000; // Turf usa quilômetros
@@ -219,7 +248,10 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                         }
                     } catch (err) {
                         console.error("Erro ao gerar polígono do círculo:", err);
-                        alert("Não foi possível gerar o polígono do círculo.");
+                        showAlert("Não foi possível gerar o polígono do círculo.", {
+                            icon: "error",
+                            title: "Erro ao gerar círculo",
+                        });
                     } finally {
                         try { window.__manualName = ""; window.__manualRadius = undefined; } catch { }
                     }
@@ -437,7 +469,10 @@ export default function GeomanLoteador() {
                 setProjetos(list);
             } catch (e) {
                 console.error("[fetch projetos] erro:", safePickAxiosError(e));
-                alert("Erro ao carregar projetos (faça login).");
+                showAlert("Erro ao carregar projetos (faça login).", {
+                    icon: "error",
+                    title: "Erro ao carregar projetos",
+                });
             }
         })();
     }, []);
@@ -566,7 +601,10 @@ export default function GeomanLoteador() {
             setTimeout(() => recalcRef.current?.(), 0);
         } catch (e) {
             console.error("[abrirProjeto] erro:", safePickAxiosError(e));
-            alert("Não foi possível abrir o projeto.");
+            showAlert("Não foi possível abrir o projeto.", {
+                icon: "error",
+                title: "Erro ao abrir projeto",
+            });
         }
     }
 
@@ -967,7 +1005,12 @@ export default function GeomanLoteador() {
 
 
     async function salvarRestricoesVersao() {
-        if (!projetoSel) { alert("Selecione um projeto."); return; }
+        if (!projetoSel) {
+            showAlert("Selecione um projeto antes de salvar as restrições.", {
+                icon: "warning",
+                title: "Projeto não selecionado",
+            }); return;
+        }
         setIsSaving(true);
         try {
             const payload = {
@@ -982,11 +1025,17 @@ export default function GeomanLoteador() {
             console.log("manuais features:", payload?.adHoc?.manuais?.features?.length);
 
             const { data } = await axiosAuth.post(`/projetos/${projetoSel}/restricoes/`, payload);
-            alert(`Versão salva: v${data.version}`);
+            showAlert(`Versão salva: v${data.version}`, {
+                icon: "success",
+                title: "Versão salva com sucesso",
+            });
 
         } catch (e) {
             console.error("[salvar restrições] erro:", safePickAxiosError(e));
-            alert("Erro ao salvar as restrições.");
+            showAlert("Erro ao salvar as restrições.", {
+                icon: "error",
+                title: "Erro ao salvar",
+            });
         } finally {
             setIsSaving(false);
         }
@@ -1017,16 +1066,16 @@ export default function GeomanLoteador() {
 
 
             {/* <div className="absolute z-[1000] bottom-70 flex items-center w-100 gap-4 text-sm bg-white/60 rounded-lg px-3 py-2">
-                <div className="space-y-0.5">
-                    <div className="font-medium">AOI</div>
-                    <div>{(aoiAreaM2 / 1e6).toFixed(4)} km² • {(aoiAreaM2 / 10000).toFixed(2)} ha • {aoiAreaM2.toFixed(0)} m²</div>
-                </div>
-                <div className="w-px h-6 bg-gray-300" />
-                <div className="space-y-0.5">
-                    <div className="font-medium">Área Loteável</div>
-                    <div>{(loteavelAreaM2 / 1e6).toFixed(4)} km² • {(loteavelAreaM2 / 10000).toFixed(2)} ha • {loteavelAreaM2.toFixed(0)} m²</div>
-                </div>
-            </div> */}
+                    <div className="space-y-0.5">
+                        <div className="font-medium">AOI</div>
+                        <div>{(aoiAreaM2 / 1e6).toFixed(4)} km² • {(aoiAreaM2 / 10000).toFixed(2)} ha • {aoiAreaM2.toFixed(0)} m²</div>
+                    </div>
+                    <div className="w-px h-6 bg-gray-300" />
+                    <div className="space-y-0.5">
+                        <div className="font-medium">Área Loteável</div>
+                        <div>{(loteavelAreaM2 / 1e6).toFixed(4)} km² • {(loteavelAreaM2 / 10000).toFixed(2)} ha • {loteavelAreaM2.toFixed(0)} m²</div>
+                    </div>
+                </div> */}
 
             {/* Painel principal (projetos / AV / Ruas / Loteável) */}
             <div className="absolute z-[1000] bottom-50 left-2 bg-white/80 rounded-xl shadow p-3 space-y-3 max-w-[1080px]">
@@ -1088,11 +1137,30 @@ export default function GeomanLoteador() {
                         Área Verde
                     </button>
                     <div className="flex  flex-col items-start gap-2 flex-wrap mt-2">
+                        {/* Polígono Manual */}
                         <button
-                            onClick={() => {
-                                const nm = window.prompt("Nome da restrição (polígono):") || "";
-                                if (!nm.trim()) { alert("Informe um nome."); return; }
-                                window.__manualName = nm.trim(); // cache rápido
+                            onClick={async () => {
+                                const { value: nm } = await Swal.fire({
+                                    title: "Nome da restrição (polígono)",
+                                    input: "text",
+                                    inputPlaceholder: "Digite o nome da restrição...",
+                                    showCancelButton: true,
+                                    confirmButtonText: "Continuar",
+                                    cancelButtonText: "Cancelar",
+                                    confirmButtonColor: "#16a34a",
+                                    cancelButtonColor: "#6b7280",
+                                    inputValidator: (value) => {
+                                        if (!value || !value.trim()) {
+                                            return "Informe um nome para a restrição.";
+                                        }
+                                        return null;
+                                    },
+                                });
+
+                                // Cancelou
+                                if (!nm || !nm.trim()) return;
+
+                                window.__manualName = nm.trim();
                                 setDrawMode("manualPolygon");
                                 setDrawNonce((n) => n + 1);
                             }}
@@ -1102,13 +1170,59 @@ export default function GeomanLoteador() {
                             Polígono Manual
                         </button>
 
+                        {/* Círculo Manual */}
                         <button
-                            onClick={() => {
-                                const nm = window.prompt("Nome da restrição (círculo):") || "";
-                                if (!nm.trim()) { alert("Informe um nome."); return; }
-                                const raioStr = window.prompt("Raio do círculo (em metros):") || "";
-                                const raio = parseFloat(raioStr);
-                                if (!Number.isFinite(raio) || raio <= 0) { alert("Raio inválido."); return; }
+                            onClick={async () => {
+                                // 1) Primeiro pergunta o nome
+                                const { value: nm } = await Swal.fire({
+                                    title: "Nome da restrição (círculo)",
+                                    input: "text",
+                                    inputPlaceholder: "Digite o nome da restrição...",
+                                    showCancelButton: true,
+                                    confirmButtonText: "Continuar",
+                                    cancelButtonText: "Cancelar",
+                                    confirmButtonColor: "#16a34a",
+                                    cancelButtonColor: "#6b7280",
+                                    inputValidator: (value) => {
+                                        if (!value || !value.trim()) {
+                                            return "Informe um nome para a restrição.";
+                                        }
+                                        return null;
+                                    },
+                                });
+
+                                if (!nm || !nm.trim()) return; // cancelou
+
+                                // 2) Depois pergunta o raio
+                                const { value: raioStr } = await Swal.fire({
+                                    title: "Raio do círculo (em metros)",
+                                    input: "number",
+                                    inputPlaceholder: "Ex: 50",
+                                    showCancelButton: true,
+                                    confirmButtonText: "Continuar",
+                                    cancelButtonText: "Cancelar",
+                                    confirmButtonColor: "#16a34a",
+                                    cancelButtonColor: "#6b7280",
+                                    inputAttributes: {
+                                        min: "0.1",
+                                        step: "0.1",
+                                    },
+                                    inputValidator: (value) => {
+                                        if (!value) {
+                                            return "Informe o raio em metros.";
+                                        }
+                                        const n = Number(value);
+                                        if (!Number.isFinite(n) || n <= 0) {
+                                            return "Raio inválido. Use um número maior que zero.";
+                                        }
+                                        return null;
+                                    },
+                                });
+
+                                if (raioStr === undefined) return; // cancelou
+
+                                const raio = Number(raioStr);
+
                                 window.__manualName = nm.trim();
                                 window.__manualRadius = raio;
                                 setDrawMode("manualCircle");
@@ -1120,6 +1234,7 @@ export default function GeomanLoteador() {
                             Círculo Manual (raio m)
                         </button>
                     </div>
+
 
                 </div>
 
@@ -1329,13 +1444,21 @@ export default function GeomanLoteador() {
                                                 defaultRuaWidth
                                             );
                                         } else {
-                                            alert("Linha muito curta. Desenhe com pelo menos dois pontos.");
+                                            showAlert("Linha muito curta. Desenhe com pelo menos dois pontos.", {
+                                                icon: "warning",
+                                                title: "Linha muito curta",
+                                            });
                                         }
                                     } else {
                                         // MultiLineString → mantém só partes com 2+ pontos
                                         const has2 = (coords) => Array.isArray(coords) && coords.length >= 2;
                                         const parts = (g.coordinates || []).filter(has2);
-                                        if (!parts.length) { alert("Linha inválida."); return; }
+                                        if (!parts.length) {
+                                            showAlert("Linha inválida.", {
+                                                icon: "warning",
+                                                title: "Geometria inválida",
+                                            });
+                                        }
                                         const geom =
                                             parts.length === 1
                                                 ? { type: "LineString", coordinates: parts[0] }

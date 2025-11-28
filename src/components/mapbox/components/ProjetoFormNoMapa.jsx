@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Swal from "sweetalert2";
 
 export default function ProjetoFormNoMapa({ defaultUF = "", defaultMunicipio = "", onSubmit }) {
     const [name, setName] = useState("");
@@ -30,11 +31,19 @@ export default function ProjetoFormNoMapa({ defaultUF = "", defaultMunicipio = "
         const municipioTrim = municipio.trim();
 
         if (!trimmedName) {
-            alert("Informe um nome para o projeto.");
+            Swal.fire({
+                icon: "warning",
+                title: "Atenção",
+                text: "Informe um nome para o projeto.",
+            });
             return;
         }
         if (!ufUp || ufUp.length !== 2) {
-            alert("Informe a UF com 2 letras (ex.: SC).");
+            Swal.fire({
+                icon: "warning",
+                title: "UF Inválida",
+                text: "Informe a UF com 2 letras (ex.: SC).",
+            });
             return;
         }
 

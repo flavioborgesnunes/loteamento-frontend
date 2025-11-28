@@ -8,6 +8,7 @@ import tokml from 'tokml';
 import ControlsPanel from './ControlsPanel';
 import ProjetoFormNoMapa from './components/ProjetoFormNoMapa';
 import * as turf from '@turf/turf';
+import Swal from "sweetalert2";
 
 import 'mapbox-gl/dist/mapbox-gl.css';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
@@ -595,7 +596,11 @@ export default function MapBoxComponent() {
 
             // precisa ter pelo menos um polígono para ser "principal"
             if (!polysFC.features.length) {
-                alert('O KML principal não contém nenhum polígono. Carregue um perímetro (Polygon/MultiPolygon).');
+                Swal.fire({
+                    icon: "error",
+                    title: "Arquivo inválido",
+                    text: "O KML principal não contém nenhum polígono.",
+                });
                 // ainda assim podemos desenhar as linhas (só para visualização)
                 if (linesFC.features.length) {
                     ensureSource(map.current, 'principal_lines', linesFC);
@@ -650,7 +655,11 @@ export default function MapBoxComponent() {
 
         } catch (err) {
             console.error(err);
-            alert(`Erro ao abrir KML/KMZ principal: ${err.message || err}`);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao abrir arquivo",
+                text: err.message || "Falha ao processar o KML/KMZ.",
+            });
         } finally {
             e.target.value = null;
         }
@@ -664,7 +673,11 @@ export default function MapBoxComponent() {
             const kmlText = await readKMLorKMZFile(file);
             let fc = parseKMLTextToGeoJSON(kmlText);
             if (!fc?.features?.length) {
-                alert(`KML/KMZ "${file.name}" está vazio.`);
+                Swal.fire({
+                    icon: "error",
+                    title: "Arquivo vazio",
+                    text: "Esse KML/KMZ não contém elementos utilizáveis.",
+                });
                 return;
             }
 
@@ -728,7 +741,12 @@ export default function MapBoxComponent() {
             }
         } catch (err) {
             console.error(err);
-            alert(`Erro ao abrir "${file?.name}": ${err.message || err}`);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao importar",
+                text: `Não foi possível abrir o arquivo ${file?.name}.`,
+            });
+
         } finally {
             setShowSecModal(false);
         }
@@ -969,7 +987,11 @@ export default function MapBoxComponent() {
                 }
             }
             if (!aoiFeature?.geometry) {
-                alert("Defina um polígono principal (AOI) ou carregue overlays para gerar uma AOI automática.");
+                Swal.fire({
+                    icon: "warning",
+                    title: "AOI não encontrada",
+                    text: "Defina um polígono principal (AOI) antes de exportar.",
+                });
                 return;
             }
 
@@ -1089,7 +1111,11 @@ export default function MapBoxComponent() {
                 } catch { }
                 return err?.message || "Falha ao exportar.";
             })();
-            alert(msg);
+            Swal.fire({
+                icon: "error",
+                title: "Erro no servidor",
+                text: msg || "Falha ao exportar o projeto.",
+            });
         }
     };
 
