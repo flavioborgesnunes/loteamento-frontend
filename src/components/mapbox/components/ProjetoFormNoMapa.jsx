@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 
-export default function ProjetoFormNoMapa({ defaultUF = "", onSubmit }) {
+export default function ProjetoFormNoMapa({ defaultUF = "", defaultMunicipio = "", onSubmit }) {
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
     const [uf, setUf] = useState("");
+    const [municipio, setMunicipio] = useState("");
 
     const [busy, setBusy] = useState(false);
 
@@ -14,11 +15,19 @@ export default function ProjetoFormNoMapa({ defaultUF = "", onSubmit }) {
         }
     }, [defaultUF]);
 
+    // ⬇️ NOVO: sincroniza município escolhido no mapa
+    useEffect(() => {
+        if (defaultMunicipio) {
+            setMunicipio(defaultMunicipio);
+        }
+    }, [defaultMunicipio]);
+
     async function handleSubmit(e) {
         e.preventDefault();
         const trimmedName = name.trim();
         const trimmedDesc = description.trim();
         const ufUp = (uf || "").toUpperCase();
+        const municipioTrim = municipio.trim();
 
         if (!trimmedName) {
             alert("Informe um nome para o projeto.");
@@ -31,9 +40,13 @@ export default function ProjetoFormNoMapa({ defaultUF = "", onSubmit }) {
 
         try {
             setBusy(true);
-            // Envie os dados completos para o pai (que vai salvar e exportar)
             await Promise.resolve(
-                onSubmit?.({ name: trimmedName, description: trimmedDesc, uf: ufUp })
+                onSubmit?.({
+                    name: trimmedName,
+                    description: trimmedDesc,
+                    uf: ufUp,
+                    municipio: municipioTrim || null,
+                })
             );
         } finally {
             setBusy(false);
@@ -47,8 +60,8 @@ export default function ProjetoFormNoMapa({ defaultUF = "", onSubmit }) {
         >
             <h3 className="text-base font-semibold">Criar/Salvar Projeto</h3>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <label className="flex flex-col gap-1 md:col-span-2">
                     <span className="text-sm text-gray-700">Nome do projeto *</span>
                     <input
                         className="border rounded px-3 py-2 text-sm"
@@ -68,6 +81,19 @@ export default function ProjetoFormNoMapa({ defaultUF = "", onSubmit }) {
                         value={uf}
                         onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))}
                         required
+                    />
+                </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1">
+                    <span className="text-sm text-gray-700">Município (opcional)</span>
+                    <input
+                        className="border rounded px-3 py-2 text-sm"
+                        placeholder="Ex.: Florianópolis"
+                        value={municipio}
+                        onChange={(e) => setMunicipio(e.target.value)}
+                        maxLength={150}
                     />
                 </label>
             </div>

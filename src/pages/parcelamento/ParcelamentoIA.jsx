@@ -4,6 +4,8 @@ import useAxios from "../../utils/useAxios";
 import useParcelamentoApi from "./parcelamento";
 import ParcelamentoIAPanel from "./ParcelamentoIAPanel";
 
+import { Expand, Shrink } from "lucide-react";
+
 // (IMPORTS do OpenLayers iguais ao Parcelamento.jsx)
 import "ol/ol.css";
 import Map from "ol/Map";
@@ -478,12 +480,14 @@ const styleSelected = new Style({
     fill: new Fill({ color: "rgba(34,197,94,0.12)" }),
 });
 
+
 export default function ParcelamentoIA() {
     const axiosAuth = useAxios();
     const { getOrCreatePlanoForProject } = useParcelamentoApi();
 
     const mapRef = useRef(null);
     const containerRef = useRef(null);
+    const wrapperRef = useRef(null);
     const baseLayersRef = useRef({});
     const layersRef = useRef({
         aoi: null,
@@ -528,9 +532,15 @@ export default function ParcelamentoIA() {
 
     const [projetos, setProjetos] = useState([]);
     const [projetoSel, setProjetoSel] = useState("");
+    const [projetoTexto, setProjetoTexto] = useState("");
     const [versoes, setVersoes] = useState([]);
     const [restricaoSel, setRestricaoSel] = useState("");
     const [geo, setGeo] = useState(null);
+
+    // FullScreen
+    const [isFullscreen, setIsFullscreen] = useState(false);
+
+
 
     const [planoId, setPlanoId] = useState(null);
     const [selState, setSelState] = useState({
@@ -541,10 +551,26 @@ export default function ParcelamentoIA() {
         prof: "",
     });
 
-    // const [editTarget, setEditTarget] = useState("none");
-    // const [baseSel, setBaseSel] = useState(
-    //     import.meta.env.VITE_MAPBOX_TOKEN?.trim() ? "mapbox-hibrido" : "esri"
-    // );
+    // FullScreen:
+    const toggleFullscreen = () => {
+        const el = wrapperRef.current;   // 👈 em vez de containerRef
+        if (!el) return;
+
+        if (!isFullscreen) {
+            if (el.requestFullscreen) {
+                el.requestFullscreen().catch((err) => {
+                    console.error("Erro ao entrar em fullscreen:", err);
+                });
+            }
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen().catch((err) => {
+                    console.error("Erro ao sair do fullscreen:", err);
+                });
+            }
+        }
+    };
+
 
     // ---------------- Init Mapa ----------------
     useEffect(() => {
@@ -638,7 +664,7 @@ export default function ParcelamentoIA() {
             controls: defaultControls({ attribution: true }).extend([
                 new Zoom(),
                 new Rotate(),
-                new FullScreen(),
+                // new FullScreen(),
                 new ScaleLine(),
                 new MousePosition({
                     coordinateFormat: createStringXY(5),
@@ -877,6 +903,18 @@ export default function ParcelamentoIA() {
         })();
     }, [projetoSel]);
 
+    useEffect(() => {
+        if (!projetoSel) {
+            setProjetoTexto("");
+            return;
+        }
+        const proj = projetos.find((p) => p.id === Number(projetoSel));
+        if (proj) {
+            setProjetoTexto(proj.name || `Projeto #${proj.id}`);
+        }
+    }, [projetoSel, projetos]);
+
+
     // abrir versão
     useEffect(() => {
         setGeo(null);
@@ -953,6 +991,20 @@ export default function ParcelamentoIA() {
         setLayerData(layersRef.current.calcadas, toFC(parcelOficial.calcadas), styleCalcada);
     }, [parcelOficial]);
 
+    useEffect(() => {
+        const handler = () => {
+            const el = wrapperRef.current;
+            // true se o elemento do mapa for o que está em fullscreen
+            setIsFullscreen(!!el && document.fullscreenElement === el);
+        };
+
+        document.addEventListener("fullscreenchange", handler);
+        return () => {
+            document.removeEventListener("fullscreenchange", handler);
+        };
+    }, []);
+
+
     // Params extras enviados para a IA (mask de ruas, eixos, guia)
     const extraParams = useMemo(() => {
         const L = layersRef.current;
@@ -981,23 +1033,42 @@ export default function ParcelamentoIA() {
     };
 
     return (
-        <div className="w-full h-full relative">
+        <div ref={wrapperRef} className="w-full h-full relative">
+
             {/* Barra superior: escolha de projeto / versão / base */}
             <div className="absolute z-[1000] top-2 left-1/2 -translate-x-1/2 bg-white/80 backdrop-blur rounded-xl shadow p-3 flex flex-wrap gap-2 items-center">
-                <select
+                <input
+                    list="lista-projetos"
                     className="border p-2 rounded min-w-[260px]"
-                    value={projetoSel || ""}
-                    onChange={(e) =>
-                        setProjetoSel(Number(e.target.value) || "")
-                    }
-                >
-                    <option value="">Selecione um projeto…</option>
+                    value={projetoTexto}
+                    onChange={(e) => {
+                        const v = e.target.value;
+                        setProjetoTexto(v);
+
+                        // tenta achar um projeto com nome exatamente igual ao texto
+                        const proj = projetos.find(
+                            (p) => (p.name || `Projeto #${p.id}`) === v
+                        );
+
+                        if (proj) {
+                            setProjetoSel(proj.id);
+                        } else {
+                            // se não casar exatamente, ainda não seleciona nada
+                            setProjetoSel("");
+                        }
+                    }}
+                    placeholder="Selecione um projeto…"
+                />
+
+                <datalist id="lista-projetos">
                     {projetos.map((p) => (
-                        <option key={p.id} value={p.id}>
-                            {p.name || `Projeto #${p.id}`}
-                        </option>
+                        <option
+                            key={p.id}
+                            value={p.name || `Projeto #${p.id}`}
+                        />
                     ))}
-                </select>
+                </datalist>
+
 
                 <select
                     className="border p-2 rounded min-w-[260px]"
@@ -1041,8 +1112,23 @@ export default function ParcelamentoIA() {
                 </select>
             </div>
 
+
+            {/* Botão de Fullscreen (Lucide) */}
+            <button
+                type="button"
+                onClick={toggleFullscreen}
+                className="absolute z-[1100] top-2 right-2 bg-white/90 backdrop-blur rounded-sm border border-slate-300 shadow-md w-10 h-10 text-lg flex items-center justify-center hover:shadow-lg hover:bg-slate-50 transition"
+                title={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+            >
+                {isFullscreen ? (
+                    <Shrink className="w-5 h-5 text-slate-800" />
+                ) : (
+                    <Expand className="w-5 h-5 text-slate-800" />
+                )}
+            </button>
+
             {/* Painel IA */}
-            <div className="absolute z-[1000] bottom-10 right-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[420px]">
+            <div className="absolute z-[1000] top-30 left-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[420px]">
                 <h3 className="font-semibold mb-2">
                     Parcelamento com IA (Prévia)
                 </h3>

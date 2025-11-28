@@ -24,6 +24,8 @@
     "jszip": "^3.10.1",
     "jwt-decode": "^4.0.0",
     "leaflet": "^1.9.4",
+    "leaflet-fullscreen": "^1.0.2",
+    "leaflet.fullscreen": "^4.0.0",
     "lucide-react": "^0.513.0",
     "mapbox-gl": "^2.14.1",
     "mapbox-gl-draw-snap-mode": "^0.4.0",

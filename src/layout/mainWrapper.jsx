@@ -5,7 +5,7 @@ import { Navigate, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { logout } from '../utils/auth'
 import bgBase from '../components/base/bg-base.png';
-import { Bell, User, CircleUserRound, Settings, FileUp, Brain, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut, UserRoundPlus, Eye, MapPlus } from 'lucide-react';
+import { Bell, User, CircleUserRound, Settings, FileUp, Brain, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut, UserRoundPlus, Eye, MapPlus, Grid } from 'lucide-react';
 import ItemMenu from '../components/base/ItemMenu';
 import logo from '../pages/auth/images/logoctz.png';
 
@@ -75,11 +75,11 @@ const MainWrapper = () => {
                             <img src={logo} className='pt-15 pb-8 mb-5 w-50 border-b-2 border-b-gray-200' />
                             <ItemMenu icon={LayoutDashboard} text="Dashboard" to="/dashboard" />
                             <ItemMenu icon={FileUp} text="Novo Estudo" to="/estudo" />
-                            <ItemMenu icon={MonitorDown} text="Projetos" to="/projetos" />
                             <ItemMenu icon={MapPlus} text="Restrições" to="/loteador" />
+                            <ItemMenu icon={Grid} text="Parcelamento" to="/parcelamento" />
+                            <ItemMenu icon={Grid} text="Parcelamento com I.A." to="/ia-parcelamento" />
+                            <ItemMenu icon={MonitorDown} text="Projetos" to="/projetos" />
                             <ItemMenu icon={Eye} text="Visualizar" to="/visualizar-projetos" />
-                            <ItemMenu icon={Eye} text="Parcelamento" to="/parcelamento" />
-                            <ItemMenu icon={Eye} text="Parcelamento com I.A." to="/ia-parcelamento" />
                             {/* <ItemMenu icon={Eye} text="Teste" to="/parcelamento/gerar-quarteirao" /> */}
                             {/* <ItemMenu icon={Brain} text="Estudo com AI" to="/ia" /> */}
                             {(user.role === 'dono' || user.role === 'adm') && (
@@ -116,7 +116,7 @@ const MainWrapper = () => {
                     {/* Conteúdo sobreposto ou abaixo da imagem */}
 
                     <div className='flex mt-10 justify-between items-center px-5 text-white'>
-                        <h1 className="text-xl">Dashboard</h1>
+                        <h1 className="text-xl">Lotenet</h1>
                         <div className='flex gap-5 mr-5 font-bold items-center'>
                             <User className='mr-1' />
                             <p className='pr-5 border-r-1' >Fale com um especialista</p>

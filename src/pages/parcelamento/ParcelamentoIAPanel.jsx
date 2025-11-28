@@ -135,7 +135,7 @@ export default function ParcelamentoIAPanel({
     const labelSvg = loadingSvg ? "⏳ Gerando ..." : "(IA)";
 
     return (
-        <div className="p-3 space-y-3">
+        <div className="p-3 mb-10 space-y-3">
             <div>
                 <label className="block text-sm font-medium mb-1">
                     Pedido para a IA (preferências)
@@ -148,7 +148,7 @@ export default function ParcelamentoIAPanel({
                 />
             </div>
 
-            {/* Parâmetros (editáveis, mas agora influenciados pela IA) */}
+            {/* Parâmetros (editáveis, mas agora influenciados pela IA)
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
                 <label>
                     Frente mínima (m)
@@ -218,7 +218,7 @@ export default function ParcelamentoIAPanel({
                         onChange={(e) => setParams(p => ({ ...p, calcada_largura_m: parseFloat(e.target.value) }))}
                     />
                 </label>
-            </div>
+            </div> */}
 
             <div className="flex flex-wrap gap-2">
                 <button
@@ -260,7 +260,7 @@ export default function ParcelamentoIAPanel({
                 </div>
             )}
 
-            {svgPreview && (
+            {/* {svgPreview && (
                 <div className="mt-2">
                     <div className="text-xs font-semibold mb-1">Prévia SVG (IA):</div>
                     <div
@@ -268,7 +268,7 @@ export default function ParcelamentoIAPanel({
                         dangerouslySetInnerHTML={{ __html: svgPreview }}
                     />
                 </div>
-            )}
+            )} */}
         </div>
     );
 }

@@ -9,6 +9,8 @@ import {
     Pane,
 } from "react-leaflet";
 import L from "leaflet";
+import "leaflet-fullscreen";
+import "leaflet-fullscreen/dist/leaflet.fullscreen.css";
 
 import "leaflet/dist/leaflet.css";
 import "@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css";
@@ -20,6 +22,8 @@ import AreaVerde from "./components/AreaVerde";
 import useAreaVerde from "./components/useAreaVerde";
 import useRuas from "./components/useRuas";
 import Ruas from "./components/Ruas";
+import { Expand, Shrink } from "lucide-react";
+
 
 import {
     fitToFeatures,
@@ -31,6 +35,10 @@ import {
     extendLinesMeters,
     ensureFeaturePolygon,
 } from "./geoUtils";
+
+import "leaflet-fullscreen";
+import "leaflet-fullscreen/dist/leaflet.fullscreen.css";
+
 
 const token = import.meta.env.VITE_MAPBOX_TOKEN?.trim();
 const DEBUG = true;
@@ -113,21 +121,20 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
 
     useEffect(() => {
         if (!controlsReadyRef.current) {
-            // Controles Geoman
             map.pm.addControls({
                 position: "topleft",
                 drawMarker: false,
-                drawCircle: true,
+                drawCircle: false,
                 drawCircleMarker: false,
                 drawText: false,
-                drawPolyline: true,
+                drawPolyline: false,
                 drawRectangle: false,
-                drawPolygon: true,
-                cutPolygon: true,
-                editMode: true,
-                dragMode: true,
+                drawPolygon: false,
+                cutPolygon: false,
+                editMode: true,   // ✅ apenas essa ferramenta visível
+                dragMode: false,
                 rotateMode: false,
-                removalMode: true,
+                removalMode: false,
             });
             try {
                 map.pm.setGlobalOptions({
@@ -136,6 +143,7 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                     snapDistance: 20,
                 });
             } catch { }
+
             controlsReadyRef.current = true;
             onMapReady?.(map);
         }
@@ -395,6 +403,31 @@ export default function GeomanLoteador() {
     const [isSaving, setIsSaving] = useState(false);
     const [isListing, setIsListing] = useState(false);
 
+    const [projetoQuery, setProjetoQuery] = useState("");
+    const [isProjetosOpen, setIsProjetosOpen] = useState(false);
+
+
+    // Filtro dos projetos conforme o texto digitado
+    const projetosFiltrados = useMemo(() => {
+        if (!projetoQuery.trim()) return projetos;
+        const q = projetoQuery.toLowerCase();
+        return projetos.filter((p) =>
+            (p.name || "").toLowerCase().includes(q) ||
+            String(p.id).includes(q)
+        );
+    }, [projetos, projetoQuery]);
+
+    useEffect(() => {
+        if (!projetoSel) return;
+        const p = projetos.find((p) => p.id === projetoSel);
+        if (p) {
+            setProjetoQuery(p.name || `Projeto #${p.id}`);
+        }
+    }, [projetoSel, projetos]);
+
+
+
+
 
 
     useEffect(() => {
@@ -603,12 +636,27 @@ export default function GeomanLoteador() {
         });
     }, [overlayList, extrasByOverlay]);
 
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
+
+        // dá um tempo pro CSS aplicar, depois recalcula o tamanho
+        setTimeout(() => {
+            try {
+                map.invalidateSize();
+            } catch { }
+        }, 300);
+    }, [isFullscreen]);
+
     // ==== Geração de margens ====
     const generateMarginsForOverlay = useCallback(
         (overlayId, { fit = false } = {}) => {
             const map = mapRef.current;
+
             const base = extrasByOverlay[overlayId];
             if (!map || !base?.features?.length || !overlayHasLines(base)) return;
+
 
             const dist = Number(marginUiByOverlay[overlayId]?.dist || 0);
             if (!(dist > 0)) {
@@ -946,8 +994,29 @@ export default function GeomanLoteador() {
 
     // ======= RENDER =======
     return (
-        <div className="w-full h-full relative">
-            <div className="absolute z-[1000] bottom-70 flex items-center w-100 gap-4 text-sm bg-white/60 rounded-lg px-3 py-2">
+        <div
+            className={
+                isFullscreen
+                    ? "fixed inset-0 z-[9999] bg-black"
+                    : "w-full h-full relative mt-10"
+            }
+        >
+            {/* Botão estilizado de fullscreen */}
+            <button
+                onClick={() => setIsFullscreen(f => !f)}
+                className="absolute z-[1100] top-3 right-20 bg-white/80 hover:bg-white text-gray-900 p-2 rounded-lg shadow-md backdrop-blur transition"
+                title={isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia"}
+            >
+                {isFullscreen ? (
+                    <Shrink size={30} strokeWidth={2} />
+                ) : (
+                    <Expand size={30} strokeWidth={2} />
+                )}
+            </button>
+
+
+
+            {/* <div className="absolute z-[1000] bottom-70 flex items-center w-100 gap-4 text-sm bg-white/60 rounded-lg px-3 py-2">
                 <div className="space-y-0.5">
                     <div className="font-medium">AOI</div>
                     <div>{(aoiAreaM2 / 1e6).toFixed(4)} km² • {(aoiAreaM2 / 10000).toFixed(2)} ha • {aoiAreaM2.toFixed(0)} m²</div>
@@ -957,26 +1026,59 @@ export default function GeomanLoteador() {
                     <div className="font-medium">Área Loteável</div>
                     <div>{(loteavelAreaM2 / 1e6).toFixed(4)} km² • {(loteavelAreaM2 / 10000).toFixed(2)} ha • {loteavelAreaM2.toFixed(0)} m²</div>
                 </div>
-            </div>
+            </div> */}
 
             {/* Painel principal (projetos / AV / Ruas / Loteável) */}
-            <div className="absolute z-[1000] bottom-10 left-2 bg-white/40 rounded-xl shadow p-3 space-y-3 max-w-[1080px]">
-                <div className="flex items-center gap-2">
-                    <select
-                        className="border p-2 rounded w-full"
-                        value={projetoSel || ""}
-                        onChange={(e) => {
-                            const idNum = Number(e.target.value);
-                            if (Number.isFinite(idNum)) abrirProjeto(idNum);
+            <div className="absolute z-[1000] bottom-50 left-2 bg-white/80 rounded-xl shadow p-3 space-y-3 max-w-[1080px]">
+                <div className=" flex flex-col items-start gap-2">
+                    <div
+                        className="relative w-full"
+                        tabIndex={-1}
+                        onBlur={(e) => {
+                            if (!e.currentTarget.contains(e.relatedTarget)) {
+                                setIsProjetosOpen(false);
+                            }
                         }}
                     >
-                        <option value="">Abrir projeto salvo…</option>
-                        {projetos.map((p) => (
-                            <option key={p.id} value={p.id}>
-                                {p.name || `Projeto #${p.id}`}
-                            </option>
-                        ))}
-                    </select>
+                        <input
+                            className="border p-2 rounded w-full text-sm"
+                            placeholder="Abrir projeto salvo…"
+                            value={projetoQuery}
+                            onFocus={() => setIsProjetosOpen(true)}
+                            onChange={(e) => {
+                                setProjetoQuery(e.target.value);
+                                setIsProjetosOpen(true);
+                            }}
+                        />
+
+                        {isProjetosOpen && (
+                            <div className="absolute left-0 right-0 mt-1 max-h-56 overflow-auto border rounded bg-white z-[1200]">
+                                {projetosFiltrados.map((p) => (
+                                    <button
+                                        key={p.id}
+                                        type="button"
+                                        className="w-full text-left px-2 py-1 text-sm hover:bg-gray-100"
+                                        onMouseDown={(e) => e.preventDefault()} // não perder o foco antes do click
+                                        onClick={() => {
+                                            setProjetoSel(p.id);
+                                            setProjetoQuery(p.name || `Projeto #${p.id}`);
+                                            setIsProjetosOpen(false);
+                                            abrirProjeto(p.id);
+                                        }}
+                                    >
+                                        {p.name || `Projeto #${p.id}`}
+                                    </button>
+                                ))}
+
+                                {!projetosFiltrados.length && (
+                                    <div className="px-2 py-1 text-xs text-gray-500">
+                                        Nenhum projeto encontrado
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
 
                     <button
                         onClick={() => setShowAreaVerde((v) => !v)}
@@ -985,7 +1087,7 @@ export default function GeomanLoteador() {
                     >
                         Área Verde
                     </button>
-                    <div className="flex items-center gap-2 flex-wrap mt-2">
+                    <div className="flex  flex-col items-start gap-2 flex-wrap mt-2">
                         <button
                             onClick={() => {
                                 const nm = window.prompt("Nome da restrição (polígono):") || "";
@@ -1042,41 +1144,7 @@ export default function GeomanLoteador() {
                     </button>
                 </div>
 
-                {/* <button
-                    disabled={!projetoSel || isComputingAL}
-                    onClick={async () => {
-                        if (!projetoSel) {
-                            alert("Selecione um projeto antes de gerar a Área Loteável.");
-                            return;
-                        }
-                        const res = await gerarAreaLoteavelComRestricoes(projetoSel, {
-                            persist: true,
-                            clean_previous: true,
-                        });
-                        if (!res) return;
-
-                        // monta Feature para exibir
-                        const feat = {
-                            type: "Feature",
-                            geometry: res.geometry,
-                            properties: { role: "loteavel", _uid: "al-0" },
-                        };
-                        setAreaLoteavel(feat);
-                        setLoteavelAreaM2(res.area_m2 || 0);
-
-                        // fit no mapa
-                        try {
-                            if (mapRef.current && res.geometry) {
-                                fitToFeatures(mapRef.current, feat);
-                            }
-                        } catch { }
-                    }}
-                    className={`px-3 py-2 rounded ${(!projetoSel || isComputingAL) ? "bg-gray-300 text-gray-600" : "bg-blue-700 text-white"}`}
-                    title="AVs − cortes − restrições (máscara de ruas)"
-                >
-                    {isComputingAL ? "Gerando Área Loteável..." : "Gerar Área Loteável"}
-                </button> */}
-                <div className="flex items-center gap-2 mt-2">
+                <div className="flex flex-col items-start gap-2 mt-2">
                     <input
                         type="text"
                         className="border p-2 rounded w-72"
@@ -1100,7 +1168,7 @@ export default function GeomanLoteador() {
             </div>
 
             {/* Painel de Camadas do Backend (visíveis por padrão) + Margens (somente linhas) */}
-            <div className="absolute z-[1000] top-75 left-2 bg-white/60 rounded-xl shadow p-3 space-y-2 min-w-[460px] max-w-[700px]">
+            <div className="absolute z-[1000] top-40 left-2 bg-white/80 rounded-xl shadow p-3 space-y-2 min-w-[460px] max-w-[700px]">
                 <div className="flex items-center justify-between">
                     <h3 className="font-semibold">Camadas do backend</h3>
                     <button
@@ -1215,6 +1283,8 @@ export default function GeomanLoteador() {
                     center={[-14, -55]}
                     zoom={4}
                     style={{ height: "100%", width: "100%" }}
+                    // fullscreenControl={true}
+                    // fullscreenControlOptions={{ position: "topright" }}
                     whenCreated={(m) => {
                         mapRef.current = m;
                         setTimeout(() => recalcRef.current?.(), 0);
@@ -1538,6 +1608,6 @@ export default function GeomanLoteador() {
 
                 </MapContainer>
             </div>
-        </div>
+        </div >
     );
 }

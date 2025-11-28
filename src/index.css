@@ -70,4 +70,7 @@ body {
 }
 
 
-  
+.mapboxgl-ctrl-geocoder {
+    display: none !important;
+}
+

@@ -29,6 +29,9 @@ const ESTADOS = {
 export default function MapBoxComponent() {
     const axiosAuth = useAxios();
     const exportandoRef = useRef(false);
+    const wrapperRef = useRef(null);
+
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     const mapContainer = useRef(null);
     const map = useRef(null);
@@ -63,6 +66,8 @@ export default function MapBoxComponent() {
     const [cidadesFiltradas, setCidadesFiltradas] = useState([]);
     const [carregandoCidades, setCarregandoCidades] = useState(false);
 
+    const [municipioSelecionado, setMunicipioSelecionado] = useState("");
+
     // 💾 estado para AOI e Rios carregados (para reidratar após trocar o estilo)
     const [aoiGeoJSON, setAoiGeoJSON] = useState(null);
     const [riosGeoJSON, setRiosGeoJSON] = useState(null);
@@ -95,6 +100,12 @@ export default function MapBoxComponent() {
             zoom: 2
         });
 
+        map.current.addControl(
+            new mapboxgl.FullscreenControl({
+                container: wrapperRef.current,  // <-- IMPORTANTE
+            }),
+            "top-right"
+        );
         draw.current = new MapboxDraw({
             controls: { polygon: true, trash: true }
         });
@@ -164,6 +175,31 @@ export default function MapBoxComponent() {
     useEffect(() => {
         if (estadoSelecionado) carregarAreasEstaduais(estadoSelecionado);
     }, [estadoSelecionado]);
+
+    useEffect(() => {
+        const handleFsChange = () => {
+            const fsEl =
+                document.fullscreenElement ||
+                document.webkitFullscreenElement ||
+                document.mozFullScreenElement ||
+                document.msFullscreenElement;
+
+            setIsFullscreen(fsEl === wrapperRef.current);
+        };
+
+        document.addEventListener("fullscreenchange", handleFsChange);
+        document.addEventListener("webkitfullscreenchange", handleFsChange);
+        document.addEventListener("mozfullscreenchange", handleFsChange);
+        document.addEventListener("MSFullscreenChange", handleFsChange);
+
+        return () => {
+            document.removeEventListener("fullscreenchange", handleFsChange);
+            document.removeEventListener("webkitfullscreenchange", handleFsChange);
+            document.removeEventListener("mozfullscreenchange", handleFsChange);
+            document.removeEventListener("MSFullscreenChange", handleFsChange);
+        };
+    }, []);
+
 
     const mudarEstiloMapa = (styleURL, ufSel) => {
         if (!map.current) return;
@@ -516,6 +552,8 @@ export default function MapBoxComponent() {
 
     const onCidadeSelecionada = async (cidadeNome) => {
         if (!cidadeNome || !ufSelecionado || !map.current) return;
+
+        setMunicipioSelecionado(cidadeNome);
 
         const nomeCompleto = `${cidadeNome}, ${ufSelecionado}, Brasil`;
         const encoded = encodeURIComponent(nomeCompleto);
@@ -915,6 +953,7 @@ export default function MapBoxComponent() {
         projectName,
         projectDescription = "",
         uf = "",
+        municipio = "",
         outFormat = "kmz",
     } = {}) => {
         try {
@@ -1002,6 +1041,7 @@ export default function MapBoxComponent() {
                 project_name: projectName || `Projeto ${new Date().toLocaleString()}`,
                 project_description: projectDescription || "",
                 uf: uf || "",
+                municipio: municipio || "",
                 aoi: aoiFeature.geometry,       // aceita Polygon/MultiPolygon/Feature/FC (backend normaliza)
                 layers,
                 simplify,
@@ -1053,83 +1093,103 @@ export default function MapBoxComponent() {
         }
     };
 
-
-
-
-    async function handleProjetoFormSubmit({ name, description, uf }) {
+    async function handleProjetoFormSubmit({ name, description, uf, municipio }) {
         await onExportKML({
             projectName: name,
             projectDescription: description,
             uf,
+            municipio,
             outFormat: "kmz",
         });
     }
 
-
-
-
-
     return (
-        <div className="relative w-[80%] h-full bg-transparent rounded-lg shadow overflow-hidden mt-10 mx-auto pb-50">
-            <div ref={mapContainer} className="w-full h-[600px]" />
+        <div className="relative w-full h-full bg-transparent rounded-lg shadow overflow-hidden mt-10 mx-auto pb-50">
 
-            <ProjetoFormNoMapa
-                defaultUF={ufSelecionado}
-                onSubmit={handleProjetoFormSubmit}
-            />
+            {/* WRAPPER que entra no fullscreen */}
+            <div
+                ref={wrapperRef}
+                className="relative w-full h-[600px] bg-transparent rounded-lg shadow overflow-hidden"
+            >
+                {/* MAPA */}
+                <div ref={mapContainer} className="w-full h-full" />
 
+                {/* ControlsPanel SEMPRE DENTRO DO MAPA */}
+                <div className="absolute top-4 left-4 z-20 max-w-[480px] ">
+                    <ControlsPanel
+                        className="h-full p-2"
+                        mapStyles={mapStyles}
+                        setStyle={setStyle}
+                        curvasProntas={curvasProntas}
+                        curvasVisiveis={curvasVisiveis}
+                        toggleCurvas={toggleCurvas}
+                        ltPronto={ltPronto}
+                        ltVisivel={ltVisivel}
+                        toggleLT={toggleLT}
+                        MFPronto={MFPronto}
+                        MFVisivel={MFVisivel}
+                        toggleMF={toggleMF}
+                        federalPronto={federalPronto}
+                        federalVisivel={federalVisivel}
+                        riosPronto={riosPronto}
+                        riosVisivel={riosVisivel}
+                        toggleRios={toggleRios}
+                        toggleFederais={toggleFederais}
+                        limitesCidadesPronto={limitesCidadesPronto}
+                        limitesCidadesVisivel={limitesCidadesVisivel}
+                        toggleLimites={toggleLimites}
+                        estados={ESTADOS}
+                        ufSelecionado={ufSelecionado}
+                        setUfSelecionado={setUfSelecionado}
+                        filtrarPorUF={filtrarPorUF}
+                        onExportKML={onExportKML}
+                        cidadesFiltradas={cidadesFiltradas}
+                        onCidadeSelecionada={onCidadeSelecionada}
+                        carregandoCidades={carregandoCidades}
+                        estadoSelecionado={estadoSelecionado}
+                        setEstadoSelecionado={setEstadoSelecionado}
+                        areasProntas={areasProntas}
+                        areasVisiveis={areasVisiveis}
+                        toggleAreasEstaduais={toggleAreasEstaduais}
+                        mudarEstiloMapa={mudarEstiloMapa}
+                        map={map.current}
+                        onKMLorKMZUploadPrincipal={onKMLorKMZUploadPrincipal}
+                        onOpenKMLSecModal={() => setShowSecModal(true)}
+                        secOverlays={secOverlays}
+                    />
+                </div>
 
-            <ControlsPanel
-                className="h-full"
-                mapStyles={mapStyles}
-                setStyle={setStyle}
-                curvasProntas={curvasProntas}
-                curvasVisiveis={curvasVisiveis}
-                toggleCurvas={toggleCurvas}
-                ltPronto={ltPronto}
-                ltVisivel={ltVisivel}
-                toggleLT={toggleLT}
-                MFPronto={MFPronto}
-                MFVisivel={MFVisivel}
-                toggleMF={toggleMF}
-                federalPronto={federalPronto}
-                federalVisivel={federalVisivel}
-                riosPronto={riosPronto}
-                riosVisivel={riosVisivel}
-                toggleRios={toggleRios}
-                toggleFederais={toggleFederais}
-                limitesCidadesPronto={limitesCidadesPronto}
-                limitesCidadesVisivel={limitesCidadesVisivel}
-                toggleLimites={toggleLimites}
-                estados={ESTADOS}
-                ufSelecionado={ufSelecionado}
-                setUfSelecionado={setUfSelecionado}
-                filtrarPorUF={filtrarPorUF}
-                onExportKML={onExportKML}
-                // onKMLUpload={onKMLorKMZUpload}
-                cidadesFiltradas={cidadesFiltradas}
-                onCidadeSelecionada={onCidadeSelecionada}
-                carregandoCidades={carregandoCidades}
-                estadoSelecionado={estadoSelecionado}
-                setEstadoSelecionado={setEstadoSelecionado}
-                areasProntas={areasProntas}
-                areasVisiveis={areasVisiveis}
-                toggleAreasEstaduais={toggleAreasEstaduais}
-                mudarEstiloMapa={mudarEstiloMapa}
-                map={map.current}
-                onKMLorKMZUploadPrincipal={onKMLorKMZUploadPrincipal}
+                {/* Form DENTRO DO MAPA SOMENTE EM FULLSCREEN */}
+                {isFullscreen && (
+                    <div className="absolute bottom-4 z-20">
+                        <ProjetoFormNoMapa
+                            defaultUF={ufSelecionado}
+                            defaultMunicipio={municipioSelecionado}
+                            onSubmit={handleProjetoFormSubmit}
+                        />
+                    </div>
+                )}
+            </div>
 
-                onOpenKMLSecModal={() => setShowSecModal(true)}
-                secOverlays={secOverlays}
+            {/* Form FORA DO MAPA quando NÃO estiver em fullscreen */}
+            {!isFullscreen && (
+                <div className="mt-4">
+                    <ProjetoFormNoMapa
+                        defaultUF={ufSelecionado}
+                        defaultMunicipio={municipioSelecionado}
+                        onSubmit={handleProjetoFormSubmit}
+                    />
+                </div>
+            )}
 
-            />
-
+            {/* Modal permanece independente do fullscreen */}
             <ModalKMLsSecundarios
                 isOpen={showSecModal}
                 onClose={() => setShowSecModal(false)}
                 onConfirm={handleAddSecondaryKML}
             />
-
         </div>
     );
+
+
 }
