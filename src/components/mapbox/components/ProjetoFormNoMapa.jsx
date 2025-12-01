@@ -1,131 +1,176 @@
 import { useEffect, useState } from "react";
 import Swal from "sweetalert2";
 
-export default function ProjetoFormNoMapa({ defaultUF = "", defaultMunicipio = "", onSubmit }) {
-    const [name, setName] = useState("");
-    const [description, setDescription] = useState("");
-    const [uf, setUf] = useState("");
-    const [municipio, setMunicipio] = useState("");
-
+export default function ProjetoFormNoMapa({
+    defaultName = "",
+    defaultDescription = "",
+    defaultUF = "",
+    defaultMunicipio = "",
+    onSalvar,
+    onExportar,
+}) {
+    const [name, setName] = useState(defaultName);
+    const [description, setDescription] = useState(defaultDescription);
+    const [uf, setUf] = useState(defaultUF || "");
+    const [municipio, setMunicipio] = useState(defaultMunicipio || "");
     const [busy, setBusy] = useState(false);
 
+    // Sincroniza quando o MapBoxComponent mudar os defaults
     useEffect(() => {
-        // sincroniza defaultUF quando mudar no pai
+        setName(defaultName || "");
+    }, [defaultName]);
+
+    useEffect(() => {
+        setDescription(defaultDescription || "");
+    }, [defaultDescription]);
+
+    useEffect(() => {
         if (defaultUF && defaultUF.length === 2) {
             setUf(defaultUF.toUpperCase());
         }
     }, [defaultUF]);
 
-    // ⬇️ NOVO: sincroniza município escolhido no mapa
     useEffect(() => {
         if (defaultMunicipio) {
             setMunicipio(defaultMunicipio);
         }
     }, [defaultMunicipio]);
 
-    async function handleSubmit(e) {
-        e.preventDefault();
-        const trimmedName = name.trim();
-        const trimmedDesc = description.trim();
-        const ufUp = (uf || "").toUpperCase();
-        const municipioTrim = municipio.trim();
+    const payload = {
+        name: name?.trim(),
+        description: description?.trim(),
+        uf: uf?.trim().toUpperCase(),
+        municipio: municipio?.trim(),
+    };
 
-        if (!trimmedName) {
+    async function handleSalvarClick(e) {
+        e.preventDefault();
+        if (!onSalvar) return;
+
+        if (!payload.name) {
             Swal.fire({
                 icon: "warning",
-                title: "Atenção",
-                text: "Informe um nome para o projeto.",
-            });
-            return;
-        }
-        if (!ufUp || ufUp.length !== 2) {
-            Swal.fire({
-                icon: "warning",
-                title: "UF Inválida",
-                text: "Informe a UF com 2 letras (ex.: SC).",
+                title: "Informe um nome",
+                text: "Dê um nome para o projeto antes de salvar.",
             });
             return;
         }
 
         try {
             setBusy(true);
-            await Promise.resolve(
-                onSubmit?.({
-                    name: trimmedName,
-                    description: trimmedDesc,
-                    uf: ufUp,
-                    municipio: municipioTrim || null,
-                })
-            );
+            await onSalvar(payload);
+        } catch (err) {
+            console.error(err);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao salvar",
+                text: "Não foi possível salvar o projeto.",
+            });
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleExportarClick(e) {
+        e.preventDefault();
+        if (!onExportar) return;
+
+        if (!payload.name) {
+            Swal.fire({
+                icon: "warning",
+                title: "Informe um nome",
+                text: "Dê um nome para o projeto antes de exportar.",
+            });
+            return;
+        }
+
+        try {
+            setBusy(true);
+            await onExportar(payload);
+        } catch (err) {
+            console.error(err);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao exportar",
+                text: "Não foi possível exportar o KML/KMZ.",
+            });
         } finally {
             setBusy(false);
         }
     }
 
     return (
-        <form
-            onSubmit={handleSubmit}
-            className="w-full max-w-xl bg-white/90 backdrop-blur rounded-xl shadow p-4 space-y-3"
-        >
-            <h3 className="text-base font-semibold">Criar/Salvar Projeto</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <label className="flex flex-col gap-1 md:col-span-2">
-                    <span className="text-sm text-gray-700">Nome do projeto *</span>
+        <form className="bg-white/90 backdrop-blur rounded-lg shadow p-4 flex flex-col gap-2 max-w-xl">
+            <div className="flex gap-2">
+                <div className="flex-1">
+                    <label className="block text-xs font-semibold mb-1">
+                        Nome do projeto
+                    </label>
                     <input
-                        className="border rounded px-3 py-2 text-sm"
-                        placeholder="Ex.: Loteamento Santa Clara"
+                        type="text"
+                        className="w-full border rounded px-2 py-1 text-sm"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
-                        maxLength={200}
-                        required
+                        placeholder="Ex: Loteamento Jardim das Árvores"
                     />
-                </label>
-
-                <label className="flex flex-col gap-1">
-                    <span className="text-sm text-gray-700">UF *</span>
+                </div>
+                <div className="w-20">
+                    <label className="block text-xs font-semibold mb-1">UF</label>
                     <input
-                        className="border rounded px-3 py-2 text-sm"
-                        placeholder="SC"
+                        type="text"
+                        className="w-full border rounded px-2 py-1 text-sm uppercase"
+                        maxLength={2}
                         value={uf}
-                        onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))}
-                        required
+                        onChange={(e) => setUf(e.target.value.toUpperCase())}
+                        placeholder="UF"
                     />
-                </label>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1">
-                    <span className="text-sm text-gray-700">Município (opcional)</span>
+            <div className="flex gap-2">
+                <div className="flex-1">
+                    <label className="block text-xs font-semibold mb-1">
+                        Município
+                    </label>
                     <input
-                        className="border rounded px-3 py-2 text-sm"
-                        placeholder="Ex.: Florianópolis"
+                        type="text"
+                        className="w-full border rounded px-2 py-1 text-sm"
                         value={municipio}
                         onChange={(e) => setMunicipio(e.target.value)}
-                        maxLength={150}
+                        placeholder="Município"
                     />
-                </label>
+                </div>
             </div>
 
-            <label className="flex flex-col gap-1">
-                <span className="text-sm text-gray-700">Descrição (opcional)</span>
+            <div>
+                <label className="block text-xs font-semibold mb-1">
+                    Descrição
+                </label>
                 <textarea
-                    className="border rounded px-3 py-2 text-sm"
-                    rows={3}
-                    placeholder="Notas, observações…"
+                    className="w-full border rounded px-2 py-1 text-sm min-h-[60px]"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    maxLength={2000}
+                    placeholder="Descrição ou observações do projeto..."
                 />
-            </label>
+            </div>
 
-            <div className="flex items-center justify-end gap-2">
+            <div className="mt-2 flex flex-wrap gap-2 justify-end">
                 <button
-                    type="submit"
+                    type="button"
+                    onClick={handleSalvarClick}
                     disabled={busy}
-                    className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm px-4 py-2 rounded"
+                    className="px-3 py-1.5 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
-                    {busy ? "Salvando…" : "Salvar & Exportar KMZ"}
+                    {busy ? "Salvando..." : "Salvar projeto"}
+                </button>
+
+                <button
+                    type="button"
+                    onClick={handleExportarClick}
+                    disabled={busy}
+                    className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+                >
+                    {busy ? "Exportando..." : "Exportar KML/KMZ"}
                 </button>
             </div>
         </form>

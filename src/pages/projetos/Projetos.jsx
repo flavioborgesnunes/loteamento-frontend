@@ -148,7 +148,7 @@ function Projetos() {
 
                 {/* Card: criar novo estudo */}
                 <Link
-                    to="/projetos/novo"
+                    to="/estudo"
                     className="cursor-pointer flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl hover:border-[#00BBF2] hover:bg-[#00BBF2]/5 transition p-4 min-h-[220px]"
                 >
                     <img src={NovoEstudo} className="w-full max-h-32 object-contain" />
@@ -168,10 +168,10 @@ function Projetos() {
                     >
                         <div>
                             <div className="flex justify-between items-center">
-                                <p className="bg-[#00BBF2] text-white font-bold py-0.5 px-4 rounded-2xl text-xs">
+                                {/* <p className="bg-[#00BBF2] text-white font-bold py-0.5 px-4 rounded-2xl text-xs">
                                     Em aprovação
-                                </p>
-
+                                </p> */}
+                                <p></p>
                                 {/* 3 pontinhos */}
                                 <button
                                     type="button"
@@ -188,7 +188,7 @@ function Projetos() {
                                     <div className="absolute right-3 top-10 bg-white border rounded shadow-md z-20 text-sm">
                                         {/* Editar */}
                                         <Link
-                                            to={`/projetos/${proj.id}`}
+                                            to={`/estudo/${proj.id}`}
                                             className="block px-4 py-2 hover:bg-gray-100"
                                             onClick={() => setOpenProjMenuId(null)}
                                         >
@@ -226,7 +226,7 @@ function Projetos() {
                             <div className="flex flex-col">
                                 {/* Só o título é link */}
                                 <Link
-                                    to={`/projetos/${proj.id}`}
+                                    to={`/estudo/${proj.id}`}
                                     className="font-bold text-lg mt-4 line-clamp-2 text-[#00BBF2] hover:underline"
                                 >
                                     {proj.name || 'Nome do Estudo'}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import useAxios from '../../utils/useAxios'
+import useAxios from '../../utils/useAxios';
 import mapboxgl from 'mapbox-gl';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import MapboxGeocoder from '@mapbox/mapbox-gl-geocoder';
@@ -9,6 +9,7 @@ import ControlsPanel from './ControlsPanel';
 import ProjetoFormNoMapa from './components/ProjetoFormNoMapa';
 import * as turf from '@turf/turf';
 import Swal from "sweetalert2";
+import { useParams, useNavigate } from "react-router-dom";
 
 import 'mapbox-gl/dist/mapbox-gl.css';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
@@ -27,12 +28,122 @@ const ESTADOS = {
     "São Paulo": "SP", "Sergipe": "SE", "Tocantins": "TO"
 };
 
+const DRAW_STYLES = [
+    // LINHAS (override total das linhas do Draw – sem line-dasharray)
+
+    // linhas "frias" (não selecionadas)
+    {
+        id: 'gl-draw-lines-inactive',
+        type: 'line',
+        filter: ['all',
+            ['==', '$type', 'LineString'],
+            ['!=', 'meta', 'vertex'],
+            ['!=', 'mode', 'static'],
+        ],
+        layout: {
+            'line-cap': 'round',
+            'line-join': 'round',
+        },
+        paint: {
+            'line-color': '#ff5500',
+            'line-width': 2,
+        },
+    },
+    // linhas "quentes" (em edição)
+    {
+        id: 'gl-draw-lines-active',
+        type: 'line',
+        filter: ['all',
+            ['==', '$type', 'LineString'],
+            ['==', 'active', 'true'],
+            ['!=', 'meta', 'vertex'],
+        ],
+        layout: {
+            'line-cap': 'round',
+            'line-join': 'round',
+        },
+        paint: {
+            'line-color': '#ff5500',
+            'line-width': 3,
+        },
+    },
+
+    // POLÍGONO “FRIO” (não selecionado)
+    {
+        id: 'gl-draw-polygon-fill-inactive',
+        type: 'fill',
+        filter: ['all', ['==', '$type', 'Polygon'], ['!=', 'meta', 'feature']],
+        paint: {
+            'fill-color': '#00aaff',
+            'fill-opacity': 0.08,
+        },
+    },
+    {
+        id: 'gl-draw-polygon-stroke-inactive',
+        type: 'line',
+        filter: ['all', ['==', '$type', 'Polygon'], ['!=', 'meta', 'feature']],
+        paint: {
+            'line-color': '#0080ff',
+            'line-width': 1.5,
+        },
+    },
+
+    // POLÍGONO “QUENTE” (selecionado / desenhando)
+    {
+        id: 'gl-draw-polygon-fill-active',
+        type: 'fill',
+        filter: ['all', ['==', '$type', 'Polygon'], ['==', 'active', 'true']],
+        paint: {
+            'fill-color': '#ffcc00',
+            'fill-opacity': 0.12,
+        },
+    },
+    {
+        id: 'gl-draw-polygon-stroke-active',
+        type: 'line',
+        filter: ['all', ['==', '$type', 'Polygon'], ['==', 'active', 'true']],
+        paint: {
+            'line-color': '#ffcc00',
+            'line-width': 2.5,
+        },
+    },
+
+    // VÉRTICES (bolinhas)
+    {
+        id: 'gl-draw-vertex-halo-active',
+        type: 'circle',
+        filter: ['all', ['==', 'meta', 'vertex'], ['==', 'active', 'true']],
+        paint: {
+            'circle-radius': 6,
+            'circle-color': '#ffffff',
+        },
+    },
+    {
+        id: 'gl-draw-vertex-active',
+        type: 'circle',
+        filter: ['all', ['==', 'meta', 'vertex'], ['==', 'active', 'true']],
+        paint: {
+            'circle-radius': 4,
+            'circle-color': '#ff5500',
+        },
+    },
+];
+
 export default function MapBoxComponent() {
+    const { id } = useParams();
+    const navigate = useNavigate();
+    const initialProjectId = id ? Number(id) : null;
+
     const axiosAuth = useAxios();
     const exportandoRef = useRef(false);
     const wrapperRef = useRef(null);
 
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [mapReady, setMapReady] = useState(false);
+
+    const [projetos, setProjetos] = useState([]);
+    const [projetoSel, setProjetoSel] = useState(null); // objeto do projeto selecionado
+    const [projetoSelId, setProjetoSelId] = useState(null);
 
     const mapContainer = useRef(null);
     const map = useRef(null);
@@ -91,6 +202,21 @@ export default function MapBoxComponent() {
         Hybrid: 'mapbox://styles/mapbox/satellite-streets-v12'
     };
 
+    // Carrega lista de projetos uma vez
+    useEffect(() => {
+        const carregarProjetos = async () => {
+            try {
+                const { data } = await axiosAuth.get('projetos/');
+                setProjetos(data || []);
+            } catch (err) {
+                console.error("Erro ao carregar projetos:", err);
+            }
+        };
+        carregarProjetos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Inicializa o mapa + Draw + geocoder
     useEffect(() => {
         if (map.current) return;
 
@@ -98,85 +224,103 @@ export default function MapBoxComponent() {
             container: mapContainer.current,
             style,
             center: [-55, -14],
-            zoom: 2
+            zoom: 2,
         });
 
         map.current.addControl(
             new mapboxgl.FullscreenControl({
-                container: wrapperRef.current,  // <-- IMPORTANTE
+                container: wrapperRef.current,
             }),
             "top-right"
         );
+
+        // Mapbox Draw usando os estilos padrão (deixa tudo funcionar 100% primeiro)
         draw.current = new MapboxDraw({
-            controls: { polygon: true, trash: true }
+            displayControlsDefault: false,
+            controls: { polygon: true, trash: true },
+            userProperties: true,
         });
+
+
         map.current.addControl(draw.current);
 
-        geocoder.current = new MapboxGeocoder({ accessToken: mapboxgl.accessToken, mapboxgl });
-        map.current.addControl(geocoder.current, 'top-left');
-        map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
+        geocoder.current = new MapboxGeocoder({
+            accessToken: mapboxgl.accessToken,
+            mapboxgl,
+        });
+        map.current.addControl(geocoder.current, "top-left");
+        map.current.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-        map.current.on('load', setupMapExtras);
+        map.current.on("load", () => {
+            setupMapExtras();
+            setMapReady(true);
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // abre projeto vindo pela URL assim que o mapa estiver pronto
+    useEffect(() => {
+        if (!mapReady) return;
+        if (!initialProjectId || !Number.isFinite(initialProjectId)) return;
+
+        abrirProjeto(initialProjectId);
+        setProjetoSelId(initialProjectId);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mapReady, initialProjectId]);
+
+    // Quando trocar o style via ControlsPanel, reidratamos coisas
     useEffect(() => {
         if (!map.current) return;
+
         map.current.setStyle(style);
-        map.current.once('style.load', () => {
+
+        map.current.once("style.load", () => {
             setupMapExtras();
 
-            // reidrata AOI principal
+            // reidrata AOI principal APENAS como source,
+            // a visualização fica por conta do Mapbox Draw
             if (aoiGeoJSON) {
-                ensureSource(map.current, 'aoi_kml', aoiGeoJSON);
-                ensureLayer(map.current, {
-                    id: 'aoi_kml-fill',
-                    type: 'fill',
-                    source: 'aoi_kml',
-                    paint: { 'fill-color': '#00aaff', 'fill-opacity': 0.15 },
-                    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-                });
-                ensureLayer(map.current, {
-                    id: 'aoi_kml-line',
-                    type: 'line',
-                    source: 'aoi_kml',
-                    paint: { 'line-color': '#0080ff', 'line-width': 2 },
-                    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-                });
+                ensureSource(map.current, "aoi_kml", aoiGeoJSON);
+                // não cria aoi_kml-fill / aoi_kml-line aqui
             }
 
-            // reidrata overlays secundários
+            // reidrata overlays secundários (essas layers continuam normais)
             secOverlays.forEach((ov, idx) => {
                 ensureSource(map.current, ov.id, ov.data);
                 const color = ov.color || secColor(idx);
+
                 ensureLayer(map.current, {
                     id: `${ov.id}-fill`,
-                    type: 'fill',
+                    type: "fill",
                     source: ov.id,
-                    paint: { 'fill-color': color, 'fill-opacity': 0.12 },
-                    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+                    paint: { "fill-color": color, "fill-opacity": 0.12 },
+                    filter: ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], true, false],
                 });
                 ensureLayer(map.current, {
                     id: `${ov.id}-outline`,
-                    type: 'line',
+                    type: "line",
                     source: ov.id,
-                    paint: { 'line-color': color, 'line-width': 2 },
-                    filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+                    paint: { "line-color": color, "line-width": 2 },
+                    filter: ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], true, false],
                 });
                 ensureLayer(map.current, {
                     id: `${ov.id}-line`,
-                    type: 'line',
+                    type: "line",
                     source: ov.id,
-                    paint: { 'line-color': color, 'line-width': 2 },
-                    filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
+                    paint: { "line-color": color, "line-width": 2 },
+                    filter: ["match", ["geometry-type"], ["LineString", "MultiLineString"], true, false],
                 });
             });
         });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [style]);
+
     // Carrega camada ao selecionar estado
     useEffect(() => {
         if (estadoSelecionado) carregarAreasEstaduais(estadoSelecionado);
     }, [estadoSelecionado]);
 
+    // Fullscreen listener
     useEffect(() => {
         const handleFsChange = () => {
             const fsEl =
@@ -201,6 +345,139 @@ export default function MapBoxComponent() {
         };
     }, []);
 
+    const clearSecOverlaysFromMap = () => {
+        if (!map.current) return;
+        setSecOverlays((prev) => {
+            prev.forEach((ov) => {
+                const baseId = ov.id;
+                const layerIds = [
+                    `${baseId}-fill`,
+                    `${baseId}-outline`,
+                    `${baseId}-line`,
+                ];
+                layerIds.forEach((lid) => {
+                    if (map.current.getLayer(lid)) {
+                        map.current.removeLayer(lid);
+                    }
+                });
+                if (map.current.getSource(baseId)) {
+                    map.current.removeSource(baseId);
+                }
+            });
+            return [];
+        });
+    };
+
+    const abrirProjeto = async (id) => {
+        if (!map.current) return;
+        try {
+            clearSecOverlaysFromMap();
+
+            const { data: resumo } = await axiosAuth.get(`projetos/${id}/map/summary/`);
+            setProjetoSel(resumo);
+            setProjetoSelId(resumo.id);
+
+            setProjectName(resumo.name || "");
+            setProjectDesc(
+                resumo.description ||
+                resumo.project_description || // se seu serializer usar outro nome
+                ""
+            );
+
+            // --- AOI ---
+            if (resumo.aoi) {
+                const aoiFeature = {
+                    type: "Feature",
+                    geometry: resumo.aoi,
+                    properties: {},
+                };
+                const fc = { type: "FeatureCollection", features: [aoiFeature] };
+
+                setPoligonoBase(aoiFeature);
+                setAoiGeoJSON(fc);
+
+                // mantém source para uso interno / export
+                ensureSource(map.current, "aoi_kml", fc);
+
+                // fit bounds na AOI
+                try {
+                    const bbox = turf.bbox(fc);
+                    map.current.fitBounds(
+                        [
+                            [bbox[0], bbox[1]],
+                            [bbox[2], bbox[3]],
+                        ],
+                        { padding: 40, duration: 0 }
+                    );
+                } catch { }
+
+                // joga AOI no Draw (a partir de agora ela é desenhada/ editada só pelo Draw)
+                syncAOIToDraw(resumo.aoi, `aoi-proj-${resumo.id}`);
+            }
+
+            // Preenche UF/município no estado (para o form)
+            setUfSelecionado(resumo.uf || "");
+            setMunicipioSelecionado(resumo.municipio || "");
+
+            // --- Overlays salvos ---
+            const novosSecOverlays = [];
+
+            for (const ov of resumo.overlays || []) {
+                const overlayId = ov.overlay_id;
+                const slug = slugify(String(overlayId));
+                const sourceId = `proj_${resumo.id}_${slug}`;
+
+                const { data: fc } = await axiosAuth.get(
+                    `projetos/${resumo.id}/features/`,
+                    { params: { overlay_id: overlayId, simplified: true } }
+                );
+
+                if (!fc?.features?.length) continue;
+
+                ensureSource(map.current, sourceId, fc);
+
+                const color = ov.color || secColor(novosSecOverlays.length);
+
+                ensureLayer(map.current, {
+                    id: `${sourceId}-fill`,
+                    type: "fill",
+                    source: sourceId,
+                    paint: { "fill-color": color, "fill-opacity": 0.12 },
+                    filter: ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], true, false],
+                });
+                ensureLayer(map.current, {
+                    id: `${sourceId}-outline`,
+                    type: "line",
+                    source: sourceId,
+                    paint: { "line-color": color, "line-width": 2 },
+                    filter: ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], true, false],
+                });
+                ensureLayer(map.current, {
+                    id: `${sourceId}-line`,
+                    type: "line",
+                    source: sourceId,
+                    paint: { "line-color": color, "line-width": 2 },
+                    filter: ["match", ["geometry-type"], ["LineString", "MultiLineString"], true, false],
+                });
+
+                novosSecOverlays.push({
+                    id: sourceId,
+                    name: overlayId,
+                    color,
+                    data: fc,
+                });
+            }
+
+            setSecOverlays(novosSecOverlays);
+        } catch (err) {
+            console.error("Erro ao abrir projeto:", err);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao carregar projeto",
+                text: "Não foi possível carregar os dados do projeto.",
+            });
+        }
+    };
 
     const mudarEstiloMapa = (styleURL, ufSel) => {
         if (!map.current) return;
@@ -215,34 +492,11 @@ export default function MapBoxComponent() {
 
     const addOrUpdateSource = (m, id, data, asAOI = false) => {
         if (!m.getSource(id)) {
-            m.addSource(id, { type: 'geojson', data });
-
-            // Se for a AOI principal, adiciona fill + line
-            if (asAOI) {
-                if (!m.getLayer('aoi_kml-fill')) {
-                    m.addLayer({
-                        id: 'aoi_kml-fill',
-                        type: 'fill',
-                        source: id,
-                        paint: { 'fill-color': '#00aaff', 'fill-opacity': 0.15 },
-                        filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-                    });
-                }
-                if (!m.getLayer('aoi_kml-line')) {
-                    m.addLayer({
-                        id: 'aoi_kml-line',
-                        type: 'line',
-                        source: id,
-                        paint: { 'line-color': '#0080ff', 'line-width': 2 },
-                        filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-                    });
-                }
-            }
+            m.addSource(id, { type: "geojson", data });
         } else {
             m.getSource(id).setData(data);
         }
     };
-
 
     const setupMapExtras = () => {
         try {
@@ -447,7 +701,7 @@ export default function MapBoxComponent() {
         if (!map.current.getLayer("limites-cidades")) return;
         const vis = map.current.getLayoutProperty("limites-cidades", "visibility");
         const novo = vis === 'visible' ? 'none' : 'visible';
-        map.current.setLayoutProperty("limites-cidades", "visibility", novo);
+        map.current.setLayoutProperty("limites-cidades", 'visibility', novo);
         setLimitesCidadesVisivel(novo === 'visible');
     };
 
@@ -586,10 +840,11 @@ export default function MapBoxComponent() {
     const onKMLorKMZUploadPrincipal = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+
         try {
             const kmlText = await readKMLorKMZFile(file);
             let fc = parseKMLTextToGeoJSON(kmlText);
-            if (!fc?.features?.length) throw new Error('KML/KMZ vazio.');
+            if (!fc?.features?.length) throw new Error("KML/KMZ vazio.");
 
             fc = explodeGeometryCollections(fc);
             const { polysFC, linesFC } = splitByGeomType(fc);
@@ -601,58 +856,57 @@ export default function MapBoxComponent() {
                     title: "Arquivo inválido",
                     text: "O KML principal não contém nenhum polígono.",
                 });
-                // ainda assim podemos desenhar as linhas (só para visualização)
+
+                // ainda podemos desenhar as linhas (só visual)
                 if (linesFC.features.length) {
-                    ensureSource(map.current, 'principal_lines', linesFC);
+                    ensureSource(map.current, "principal_lines", linesFC);
                     ensureLayer(map.current, {
-                        id: 'principal_lines-line',
-                        type: 'line',
-                        source: 'principal_lines',
-                        paint: { 'line-color': '#666', 'line-width': 2 },
-                        filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
+                        id: "principal_lines-line",
+                        type: "line",
+                        source: "principal_lines",
+                        paint: { "line-color": "#666", "line-width": 2 },
+                        filter: ["match", ["geometry-type"], ["LineString", "MultiLineString"], true, false],
                     });
                 }
                 return;
             }
 
             // guarda AOI no estado e renderiza
-            setPoligonoBase(polysFC.features[0]);
+            const aoiFromFile = polysFC.features[0];
+            setPoligonoBase(aoiFromFile);
             setAoiGeoJSON(polysFC);
 
-            ensureSource(map.current, 'aoi_kml', polysFC);
-            ensureLayer(map.current, {
-                id: 'aoi_kml-fill',
-                type: 'fill',
-                source: 'aoi_kml',
-                paint: { 'fill-color': '#00aaff', 'fill-opacity': 0.15 },
-                filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-            });
-            ensureLayer(map.current, {
-                id: 'aoi_kml-line',
-                type: 'line',
-                source: 'aoi_kml',
-                paint: { 'line-color': '#0080ff', 'line-width': 2 },
-                filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
-            });
+            // mantém source para export, mas sem layers visuais
+            ensureSource(map.current, "aoi_kml", polysFC);
 
-            // se o arquivo principal também tiver linhas, desenhe numa layer própria e fina
+            // joga AOI no Draw para permitir edição
+            if (aoiFromFile?.geometry) {
+                syncAOIToDraw(aoiFromFile.geometry, "aoi-kml");
+            }
+
+            // se o arquivo principal também tiver linhas, desenha numa layer própria
             if (linesFC.features.length) {
-                ensureSource(map.current, 'aoi_lines', linesFC);
+                ensureSource(map.current, "aoi_lines", linesFC);
                 ensureLayer(map.current, {
-                    id: 'aoi_lines-line',
-                    type: 'line',
-                    source: 'aoi_lines',
-                    paint: { 'line-color': '#999', 'line-width': 1.5 },
-                    filter: ['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false],
+                    id: "aoi_lines-line",
+                    type: "line",
+                    source: "aoi_lines",
+                    paint: { "line-color": "#999", "line-width": 1.5 },
+                    filter: ["match", ["geometry-type"], ["LineString", "MultiLineString"], true, false],
                 });
             }
 
             // fit bounds na AOI
             try {
                 const bbox = turf.bbox(polysFC);
-                map.current.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 0 });
+                map.current.fitBounds(
+                    [
+                        [bbox[0], bbox[1]],
+                        [bbox[2], bbox[3]],
+                    ],
+                    { padding: 40, duration: 0 }
+                );
             } catch { }
-
         } catch (err) {
             console.error(err);
             Swal.fire({
@@ -666,7 +920,6 @@ export default function MapBoxComponent() {
     };
 
     // KML/KMZ SECUNDÁRIO (pode abrir vários para sobrepor ao principal)
-
     const handleAddSecondaryKML = async ({ file, name }) => {
         try {
             // lê arquivo
@@ -752,10 +1005,7 @@ export default function MapBoxComponent() {
         }
     };
 
-
-
     // ---- Helpers para Mapbox (adicionar/atualizar sources/layers) ----
-
 
     /** Garante um MultiPolygon para operar recortes com Turf */
     function getAOIMultiPolygon(aoiFeature) {
@@ -784,7 +1034,6 @@ export default function MapBoxComponent() {
             } catch { return null; }
         }
 
-        // Linhas: split + filtra trechos cujo centroide está dentro da AOI
         // Linhas: split + filtra trechos cujo centroide está dentro da AOI
         if (type === 'LineString' || type === 'MultiLineString') {
             try {
@@ -835,19 +1084,18 @@ export default function MapBoxComponent() {
             }
         }
 
-
         // Outros tipos: ignorar
         return null;
     }
 
     /** Aplica recorte em todos os overlays secundários carregados (array [{id, data}]) */
-    function clipSecondaryOverlaysWithinAOI(secOverlays, aoiFeature, simplify = {}) {
-        if (!Array.isArray(secOverlays) || !secOverlays.length) return null;
+    function clipSecondaryOverlaysWithinAOI(secOverlaysArr, aoiFeature, simplify = {}) {
+        if (!Array.isArray(secOverlaysArr) || !secOverlaysArr.length) return null;
 
         const aoiMP = getAOIMultiPolygon(aoiFeature);
         const acc = [];
 
-        for (const overlay of secOverlays) {
+        for (const overlay of secOverlaysArr) {
             const src = overlay?.data;
             if (!src?.features?.length) continue;
 
@@ -855,15 +1103,12 @@ export default function MapBoxComponent() {
                 const clipped = clipFeatureByAOI(feat, aoiMP);
                 if (!clipped) continue;
 
-                // clipped pode ser Feature ou FeatureCollection (no caso de linhas)
                 const pushFeat = (f) => {
-                    let out = f;
-                    // Simplificação opcional
-                    if (simplify?.tolerance && (f.geometry.type !== 'Point')) {
-                        try { out = turf.simplify(f, { tolerance: simplify.tolerance, highQuality: false }); } catch { }
-                    }
-                    // Anota origem (id do overlay) para facilitar estilo/legenda no backend
-                    out.properties = { ...(out.properties || {}), __overlay_id: overlay.name }; acc.push(out);
+                    const out = {
+                        ...f,
+                        properties: { ...(f.properties || {}), __overlay_id: overlay.name },
+                    };
+                    acc.push(out);
                 };
 
                 if (clipped.type === 'FeatureCollection') {
@@ -877,7 +1122,6 @@ export default function MapBoxComponent() {
         if (!acc.length) return null;
         return { type: 'FeatureCollection', features: acc };
     }
-
 
     const ensureSource = (m, id, data) => {
         if (!m.getSource(id)) m.addSource(id, { type: 'geojson', data });
@@ -895,8 +1139,6 @@ export default function MapBoxComponent() {
 
     const secPalette = ['#ff4d4f', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#eb2f96', '#1890ff', '#a0d911'];
     const secColor = (i) => secPalette[i % secPalette.length];
-
-
 
     const isPoly = (f) => {
         const t = f?.geometry?.type;
@@ -926,31 +1168,89 @@ export default function MapBoxComponent() {
         return feature;
     };
 
+    const geometryToDrawFeatures = (geom) => {
+        if (!geom) return [];
+
+        if (geom.type === "Polygon") {
+            return [
+                {
+                    type: "Feature",
+                    geometry: geom,
+                    properties: {},
+                },
+            ];
+        }
+
+        if (geom.type === "MultiPolygon") {
+            return (geom.coordinates || []).map((coords) => ({
+                type: "Feature",
+                geometry: { type: "Polygon", coordinates: coords },
+                properties: {},
+            }));
+        }
+
+        return [];
+    };
+
+    const syncAOIToDraw = (geom) => {
+        if (!draw.current || !geom) return;
+
+        const drawInst = draw.current;
+
+        // 1) limpa qualquer coisa anterior do Draw
+        const all = drawInst.getAll();
+        if (all && all.features && all.features.length) {
+            drawInst.delete(all.features.map((f) => f.id));
+        }
+
+        // 2) Gera features a partir da geometria (Polygon ou MultiPolygon)
+        const featuresToAdd = geometryToDrawFeatures(geom).map((f) => ({
+            ...f,
+            // NÃO forçamos id aqui, deixamos o Mapbox Draw criar o id interno
+            properties: { ...(f.properties || {}), __aoi: true },
+        }));
+
+        if (!featuresToAdd.length) return;
+
+        // 3) Adiciona no Draw e pega os IDs gerados pelo próprio Draw
+        const newIds = drawInst.add({
+            type: "FeatureCollection",
+            features: featuresToAdd,
+        });
+
+        // 4) Entra direto em modo de edição de vértices no(s) feature(s) adicionados
+        if (Array.isArray(newIds) && newIds.length === 1) {
+            drawInst.changeMode("direct_select", { featureId: newIds[0] });
+        } else if (Array.isArray(newIds) && newIds.length > 1) {
+            drawInst.changeMode("simple_select", { featureIds: newIds });
+        }
+    };
+
+
     const getAOIForExport = () => {
+        const drawInst = draw?.current;
+
+        // 1) Tenta pegar a AOI do Draw (último polígono desenhado/editado)
+        if (drawInst) {
+            const all = drawInst.getAll()?.features || [];
+            const polys = all.filter(isPoly);
+            if (polys.length) {
+                return closeRings(polys.at(-1));
+            }
+        }
+
+        // 2) Se não tiver nada no Draw, usa o poligonoBase (KML / carregado do projeto)
         if (poligonoBase?.geometry?.type && isPoly(poligonoBase)) {
             return closeRings(poligonoBase);
         }
-        const drawInst = draw?.current;
-        if (!drawInst) throw new Error('Mapbox Draw não inicializado.');
 
-        const sel = drawInst.getSelected()?.features || [];
-        const selPolys = sel.filter(isPoly);
-        if (selPolys.length) return closeRings(selPolys.at(-1));
-
-        const all = drawInst.getAll()?.features || [];
-        const allPolys = all.filter(isPoly);
-        if (allPolys.length) return closeRings(allPolys.at(-1));
-
-        console.warn('Debug Draw:', {
-            selectedTypes: sel.map(f => f?.geometry?.type),
-            allTypes: all.map(f => f?.geometry?.type)
-        });
-        throw new Error('Nenhum polígono principal definido ou desenhado.');
+        console.warn("Debug AOI: sem polígono no Draw nem poligonoBase válido.");
+        throw new Error("Nenhum polígono principal definido ou desenhado.");
     };
 
     const exportAOIAsKML = (aoiFeature, filename = 'aoi.kml') => {
         if (!aoiFeature?.geometry) throw new Error('AOI ausente.');
-        // garante anéis fechados (usa seu helper existente)
+        // garante anéis fechados
         const feat = closeRings({ ...aoiFeature, properties: { ...(aoiFeature.properties || {}), name: 'AOI' } });
 
         const fc = { type: 'FeatureCollection', features: [feat] };
@@ -968,34 +1268,43 @@ export default function MapBoxComponent() {
     // FUNÇÃO DE EXPORT-----------------------------------------
 
     const onExportKML = async ({
+        projectId = null,
         projectName,
         projectDescription = "",
         uf = "",
         municipio = "",
         outFormat = "kmz",
+
+        // 👇 controle de salvar x exportar
+        persist = false,      // padrão: NÃO salvar
+        downloadFile = true,  // padrão: baixar arquivo
     } = {}) => {
         try {
             // 1) Tenta obter a AOI; se não existir, usa o bbox dos overlays como fallback
             let aoiFeature = null;
             try {
-                aoiFeature = getAOIForExport(); // sua função atual
+                aoiFeature = getAOIForExport();
             } catch (e) {
                 const feats = (secOverlays || []).flatMap(ov => ov?.data?.features || []);
                 if (feats.length) {
-                    const [minX, minY, maxX, maxY] = turf.bbox({ type: "FeatureCollection", features: feats });
+                    const [minX, minY, maxX, maxY] = turf.bbox({
+                        type: "FeatureCollection",
+                        features: feats,
+                    });
                     aoiFeature = turf.bboxPolygon([minX, minY, maxX, maxY]);
                 }
             }
+
             if (!aoiFeature?.geometry) {
                 Swal.fire({
                     icon: "warning",
                     title: "AOI não encontrada",
-                    text: "Defina um polígono principal (AOI) antes de exportar.",
+                    text: "Defina um polígono principal (AOI) antes de salvar ou exportar.",
                 });
                 return;
             }
 
-            // 2) Flags de camadas (igual você já usa na UI)
+            // 2) Flags de camadas
             const layers = {
                 rios: !!riosVisivel,
                 lt: !!ltVisivel,
@@ -1005,8 +1314,7 @@ export default function MapBoxComponent() {
                 areas_estaduais: Object.values(areasVisiveis || {}).some(Boolean),
             };
 
-            // 3) Overlays secundários (enviamos "raw" para o servidor recortar)
-            //    Mantemos __overlay_id e __color, se presentes.
+            // 3) Overlays secundários (raw)
             const overlaysRaw = {
                 type: "FeatureCollection",
                 features: (secOverlays || []).flatMap(ov => {
@@ -1025,83 +1333,105 @@ export default function MapBoxComponent() {
                 }),
             };
 
-            // (Opcional) Se você também quiser mandar já recortado (cliente),
-            // o backend vai preferir overlays_raw; mas manteremos por compat:
+            // 4) Recorte opcional no cliente
             const clippedOverlays = clipSecondaryOverlaysWithinAOI(
                 secOverlays.map(({ name, data, color }) => ({ id: name, data, color })),
                 aoiFeature,
                 { tolerance: 0.00002 }
             );
 
-            const overlaysClippedFC = {
+            const overlaysClippedFC = clippedOverlays || {
                 type: "FeatureCollection",
-                features: (clippedOverlays || []).flatMap(ov => {
-                    const overlayId = ov?.id || "overlay";
-                    const feats = ov?.data?.features || [];
-                    return feats.map(f => ({
-                        type: "Feature",
-                        properties: {
-                            ...(f.properties || {}),
-                            __overlay_id: f?.properties?.__overlay_id || overlayId,
-                            __color: f?.properties?.__color || ov?.color || null,
-                        },
-                        geometry: f.geometry,
-                    }));
-                }),
+                features: [],
             };
 
-            // 4) Tolerâncias de simplificação (ajuste conforme sua UX)
+            // 5) Tolerâncias
             const simplify = {
                 rios: 0.00002,
                 lt: 0.00002,
                 mf: 0.00002,
-                polygons: 0.00005,
+                polygons: 0,
             };
 
-            // 5) Monta payload conforme o serializer do backend
+
+            // 6) Payload
             const payload = {
+                project_id: projectId,
                 project_name: projectName || `Projeto ${new Date().toLocaleString()}`,
                 project_description: projectDescription || "",
                 uf: uf || "",
                 municipio: municipio || "",
-                aoi: aoiFeature.geometry,       // aceita Polygon/MultiPolygon/Feature/FC (backend normaliza)
+                aoi: aoiFeature.geometry,
                 layers,
                 simplify,
-                overlays_raw: overlaysRaw,      // servidor recorta e persiste no PostGIS
-                overlays: overlaysClippedFC,    // opcional (será ignorado se overlays_raw tiver features)
-                format: outFormat,              // "kmz" ou "kml"
-                persist: true,                  // padrão true; mantém explícito
+                overlays_raw: overlaysRaw,
+                overlays: overlaysClippedFC,
+
+                format: outFormat,
+
+                // 👇 AQUI está a chave
+                persist: !!persist,              // se false -> backend NÃO deve salvar
+                replace_overlays: !!persist,     // só substitui overlays quando estiver salvando
             };
 
-            // 6) Chama o endpoint que CRIA o projeto, SALVA os overlays e DEVOLVE o KMZ
+            // 7) Chamada ao backend
             const res = await axiosAuth.post("projetos/exportar/", payload, {
                 responseType: "blob",
             });
 
-            // 7) Extrai nome de arquivo do header (se houver)
+            // 👉 Se não for pra baixar o arquivo, só mostra mensagem e sai
+            if (!downloadFile) {
+                Swal.fire({
+                    icon: "success",
+                    title: persist
+                        ? (projectId ? "Projeto atualizado!" : "Projeto salvo!")
+                        : "Operação concluída!",
+                    text: persist
+                        ? "Os dados do projeto foram salvos no servidor."
+                        : "Operação concluída sem download de arquivo.",
+                });
+                return;
+            }
+
+            // 8) Extrai nome de arquivo (só para exibir pro usuário)
             const dispo = res.headers?.["content-disposition"] || "";
             const m = /filename="?([^"]+)"?/i.exec(dispo);
-            const filename = m?.[1] || (outFormat === "kml" ? "mapa_recorte.kml" : "mapa_recorte.kmz");
+            const filename =
+                m?.[1] ||
+                (outFormat === "kml" ? "mapa_recorte.kml" : "mapa_recorte.kmz");
 
-            // 8) Baixa o arquivo
+            // 9) Cria blob e mostra SweetAlert com link (sem auto-download)
             const blob = new Blob([res.data], {
-                type: res.headers?.["content-type"] || (outFormat === "kml"
-                    ? "application/vnd.google-earth.kml+xml"
-                    : "application/vnd.google-earth.kmz"),
+                type:
+                    res.headers?.["content-type"] ||
+                    (outFormat === "kml"
+                        ? "application/vnd.google-earth.kml+xml"
+                        : "application/vnd.google-earth.kmz"),
             });
             const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url; a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
 
-            // Dica: se quiser, aqui você pode disparar um toast de sucesso
-            // e/ou recarregar uma lista de projetos recentes na sua UI.
+            Swal.fire({
+                icon: "success",
+                title: "KML/KMZ gerado",
+                html: `
+                <p class="mb-2">
+                    Arquivo: <strong>${filename}</strong>
+                </p>
+                <p class="mb-3">
+                    Clique no botão abaixo para baixar o arquivo.".
+                </p>
+                <a href="${url}" target="_blank" rel="noopener" id="link-download" class="swal2-confirm swal2-styled"style="color: #2196f3 !important;">
+                    Baixar arquivo
+                </a>
+            `,
+                didClose: () => {
+                    URL.revokeObjectURL(url);
+                },
+                showConfirmButton: false,
+            });
+
         } catch (err) {
             console.error(err);
-            // mensagens mais amigáveis
             const msg = await (async () => {
                 try {
                     if (err?.response) {
@@ -1109,28 +1439,71 @@ export default function MapBoxComponent() {
                         return text || `Falha no backend (${err.response.status}).`;
                     }
                 } catch { }
-                return err?.message || "Falha ao exportar.";
+                return err?.message || "Falha ao salvar/exportar.";
             })();
+
             Swal.fire({
                 icon: "error",
                 title: "Erro no servidor",
-                text: msg || "Falha ao exportar o projeto.",
+                text: msg || "Falha ao salvar ou exportar o projeto.",
             });
         }
     };
 
-    async function handleProjetoFormSubmit({ name, description, uf, municipio }) {
+    async function handleSalvarProjeto({ name, description, uf, municipio }) {
         await onExportKML({
+            projectId: projetoSel?.id || null,
             projectName: name,
             projectDescription: description,
             uf,
             municipio,
             outFormat: "kmz",
+            persist: true,       // 👈 SALVAR no backend
+            downloadFile: false, // 👈 NÃO baixar arquivo
         });
     }
 
+    async function handleExportarProjeto({ name, description, uf, municipio }) {
+        await onExportKML({
+            projectId: projetoSel?.id || null,
+            projectName: name,
+            projectDescription: description,
+            uf,
+            municipio,
+            outFormat: "kmz",
+            persist: false,      // 👈 NÃO salvar no backend
+            downloadFile: true,  // 👈 SÓ baixar o arquivo
+        });
+    }
+
+
     return (
         <div className="relative w-full h-full bg-transparent rounded-lg shadow overflow-hidden mt-10 mx-auto pb-50">
+
+            {/* SELETOR DE PROJETOS SALVOS */}
+            <div className="mb-4 flex flex-wrap gap-2 items-center">
+                <label className="text-sm font-medium">Projetos salvos:</label>
+                <select
+                    className="border p-2 rounded min-w-[240px]"
+                    value={projetoSelId || ""}
+                    onChange={(e) => {
+                        const idNum = Number(e.target.value);
+                        if (Number.isFinite(idNum)) {
+                            setProjetoSelId(idNum);
+                            abrirProjeto(idNum);
+                            // ajuste esta rota se for diferente
+                            navigate(`/estudo/${idNum}`);
+                        }
+                    }}
+                >
+                    <option value="">Selecione um projeto...</option>
+                    {projetos.map((p) => (
+                        <option key={p.id} value={p.id}>
+                            {p.name} ({p.uf || "--"})
+                        </option>
+                    ))}
+                </select>
+            </div>
 
             {/* WRAPPER que entra no fullscreen */}
             <div
@@ -1189,24 +1562,30 @@ export default function MapBoxComponent() {
                 {isFullscreen && (
                     <div className="absolute bottom-4 z-20">
                         <ProjetoFormNoMapa
+                            defaultName={projectName}
+                            defaultDescription={projectDesc}
                             defaultUF={ufSelecionado}
                             defaultMunicipio={municipioSelecionado}
-                            onSubmit={handleProjetoFormSubmit}
+                            onSalvar={handleSalvarProjeto}
+                            onExportar={handleExportarProjeto}
                         />
                     </div>
                 )}
             </div>
 
-            {/* Form FORA DO MAPA quando NÃO estiver em fullscreen */}
             {!isFullscreen && (
                 <div className="mt-4">
                     <ProjetoFormNoMapa
+                        defaultName={projectName}
+                        defaultDescription={projectDesc}
                         defaultUF={ufSelecionado}
                         defaultMunicipio={municipioSelecionado}
-                        onSubmit={handleProjetoFormSubmit}
+                        onSalvar={handleSalvarProjeto}
+                        onExportar={handleExportarProjeto}
                     />
                 </div>
             )}
+
 
             {/* Modal permanece independente do fullscreen */}
             <ModalKMLsSecundarios
@@ -1216,6 +1595,4 @@ export default function MapBoxComponent() {
             />
         </div>
     );
-
-
 }
