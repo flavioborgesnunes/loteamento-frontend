@@ -13,6 +13,8 @@ import "leaflet-fullscreen";
 import "leaflet-fullscreen/dist/leaflet.fullscreen.css";
 
 import Swal from "sweetalert2";
+import JSZip from "jszip";
+import tokml from "tokml";
 
 
 import "leaflet/dist/leaflet.css";
@@ -437,6 +439,8 @@ export default function GeomanLoteador() {
 
     const [projetoQuery, setProjetoQuery] = useState("");
     const [isProjetosOpen, setIsProjetosOpen] = useState(false);
+
+    const [outFormat, setOutFormat] = useState("kmz");
 
 
     // Filtro dos projetos conforme o texto digitado
@@ -1003,6 +1007,125 @@ export default function GeomanLoteador() {
         };
     };
 
+    // ---------- GEOJSON para exportar KML/KMZ (frontend) ----------
+    const buildExportGeoJSON = () => {
+        const features = [];
+
+        // AOI
+        if (aoi?.geometry) {
+            features.push({
+                type: "Feature",
+                geometry: aoi.geometry,
+                properties: { role: "aoi" },
+            });
+        }
+
+        // Área loteável (se existir)
+        if (areaLoteavel?.geometry) {
+            features.push({
+                type: "Feature",
+                geometry: areaLoteavel.geometry,
+                properties: { role: "area_loteavel" },
+            });
+        }
+
+        // Áreas verdes
+        (areasVerdes || []).forEach((f) => {
+            if (!f?.geometry) return;
+            features.push({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: {
+                    ...(f.properties || {}),
+                    role: "area_verde",
+                },
+            });
+        });
+
+        // Cortes
+        (cortes || []).forEach((f) => {
+            if (!f?.geometry) return;
+            features.push({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: {
+                    ...(f.properties || {}),
+                    role: "corte_av",
+                },
+            });
+        });
+
+        // Ruas (eixo)
+        (ruasState || []).forEach((f) => {
+            if (!f?.geometry) return;
+            features.push({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: {
+                    ...(f.properties || {}),
+                    role: "rua",
+                    width_m: Number.isFinite(+f?.properties?.width_m)
+                        ? +f.properties.width_m
+                        : Number.isFinite(+defaultRuaWidth)
+                            ? +defaultRuaWidth
+                            : 12,
+                },
+            });
+        });
+
+        // Restrições manuais (polígonos + círculos convertidos)
+        (restrManuais || []).forEach((f) => {
+            if (!f?.geometry) return;
+            features.push({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: {
+                    ...(f.properties || {}),
+                    role: "manual",
+                },
+            });
+        });
+
+        // Overlays do backend (apenas os visíveis, pra não sujar demais)
+        Object.entries(extrasByOverlay || {}).forEach(([overlayId, pack]) => {
+            if (!overlayVisible[overlayId]) return;
+            (pack.features || []).forEach((f) => {
+                if (!f?.geometry) return;
+                features.push({
+                    type: "Feature",
+                    geometry: f.geometry,
+                    properties: {
+                        ...(f.properties || {}),
+                        role: "overlay",
+                        overlay_id: overlayId,
+                    },
+                });
+            });
+        });
+
+        // Margens (se quiser levar pro KML também)
+        Object.entries(marginGeoByOverlay || {}).forEach(([overlayId, fc]) => {
+            (fc?.features || []).forEach((f) => {
+                if (!f?.geometry) return;
+                features.push({
+                    type: "Feature",
+                    geometry: f.geometry,
+                    properties: {
+                        ...(f.properties || {}),
+                        role: "margem",
+                        overlay_id: overlayId,
+                    },
+                });
+            });
+        });
+
+        return {
+            type: "FeatureCollection",
+            features,
+        };
+    };
+
+
 
     async function salvarRestricoesVersao() {
         if (!projetoSel) {
@@ -1040,6 +1163,99 @@ export default function GeomanLoteador() {
             setIsSaving(false);
         }
     }
+
+    async function exportarKmlKmz() {
+        if (!aoi?.geometry) {
+            showAlert("Desenhe ou carregue uma AOI antes de exportar.", {
+                icon: "warning",
+                title: "AOI obrigatória",
+            });
+            return;
+        }
+
+        const fc = buildExportGeoJSON();
+        if (!fc.features.length) {
+            showAlert("Não há geometrias para exportar.", {
+                icon: "warning",
+                title: "Nada para exportar",
+            });
+            return;
+        }
+
+        let kmlString;
+        try {
+            kmlString = tokml(fc, {
+                name: "name",
+                description: "description",
+            });
+        } catch (e) {
+            console.error("[exportarKmlKmz] erro ao gerar KML:", e);
+            showAlert("Erro ao gerar o KML no frontend.", {
+                icon: "error",
+                title: "Erro na conversão",
+            });
+            return;
+        }
+
+        let blob;
+        let filenameBase = "restricoes";
+        if (projetoSel) {
+            const p = projetos.find((p) => p.id === projetoSel);
+            if (p?.name) {
+                filenameBase = p.name
+                    .normalize("NFD")
+                    .replace(/[\u0300-\u036f]/g, "")
+                    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+                    .toLowerCase();
+            }
+        }
+
+        try {
+            if (outFormat === "kmz") {
+                const zip = new JSZip();
+                zip.file("doc.kml", kmlString);
+                const content = await zip.generateAsync({ type: "blob" });
+                blob = content;
+            } else {
+                blob = new Blob([kmlString], {
+                    type: "application/vnd.google-earth.kml+xml",
+                });
+            }
+        } catch (e) {
+            console.error("[exportarKmlKmz] erro ao gerar blob:", e);
+            showAlert("Erro ao gerar o arquivo para download.", {
+                icon: "error",
+                title: "Erro na exportação",
+            });
+            return;
+        }
+
+        const ext = outFormat === "kmz" ? "kmz" : "kml";
+        const filename = `${filenameBase || "restricoes"}.${ext}`;
+        const url = URL.createObjectURL(blob);
+
+        // ❤️ SWEETALERT REFEITO – MESMO ESTILO DO RESTANTE
+        Swal.fire({
+            icon: "success",
+            title: "Exportação pronta!",
+            text: "Clique no botão abaixo para baixar o arquivo.",
+            confirmButtonText: "Baixar arquivo",
+            confirmButtonColor: "#2563eb",
+            showCancelButton: false,
+            allowOutsideClick: true,
+            willClose: () => {
+                // quando fechar, já dispara o download
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            },
+        });
+    }
+
 
     // ======= RENDER =======
     return (
@@ -1279,6 +1495,26 @@ export default function GeomanLoteador() {
                         {isSaving ? "Salvando..." : "Salvar versão de restrições"}
                     </button>
                 </div>
+
+                {/* Exportar KML/KMZ (separado do salvar) */}
+                <div className="flex items-center gap-2 mt-3">
+                    <select
+                        className="border p-2 rounded text-sm"
+                        value={outFormat}
+                        onChange={(e) => setOutFormat(e.target.value)}
+                    >
+                        <option value="kmz">KMZ (compacto)</option>
+                        <option value="kml">KML</option>
+                    </select>
+                    <button
+                        onClick={exportarKmlKmz}
+                        className="px-3 py-2 rounded bg-blue-700 text-white"
+                        title="Gerar arquivo KML/KMZ com as geometrias atuais do mapa"
+                    >
+                        Exportar {outFormat.toUpperCase()}
+                    </button>
+                </div>
+
 
             </div>
 

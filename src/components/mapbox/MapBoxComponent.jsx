@@ -1393,14 +1393,23 @@ export default function MapBoxComponent() {
                 return;
             }
 
-            // 8) Extrai nome de arquivo (só para exibir pro usuário)
+            // 8) Descobre o nome do arquivo
             const dispo = res.headers?.["content-disposition"] || "";
             const m = /filename="?([^"]+)"?/i.exec(dispo);
-            const filename =
-                m?.[1] ||
-                (outFormat === "kml" ? "mapa_recorte.kml" : "mapa_recorte.kmz");
 
-            // 9) Cria blob e mostra SweetAlert com link (sem auto-download)
+            // se vier do backend, usa; senão, monta a partir do nome do projeto
+            let filenameFromHeader = m?.[1] || "";
+            let fallbackBase = projectName && projectName.trim()
+                ? slugify(projectName.trim())
+                : "mapa_recorte";
+
+            const filename =
+                filenameFromHeader ||
+                (outFormat === "kml"
+                    ? `${fallbackBase}.kml`
+                    : `${fallbackBase}.kmz`);
+
+            // 9) Cria blob
             const blob = new Blob([res.data], {
                 type:
                     res.headers?.["content-type"] ||
@@ -1410,24 +1419,26 @@ export default function MapBoxComponent() {
             });
             const url = URL.createObjectURL(blob);
 
+            // 10) SweetAlert com ESTILO PADRÃO e download só ao clicar
             Swal.fire({
                 icon: "success",
-                title: "KML/KMZ gerado",
-                html: `
-                <p class="mb-2">
-                    Arquivo: <strong>${filename}</strong>
-                </p>
-                <p class="mb-3">
-                    Clique no botão abaixo para baixar o arquivo.".
-                </p>
-                <a href="${url}" target="_blank" rel="noopener" id="link-download" class="swal2-confirm swal2-styled"style="color: #2196f3 !important;">
-                    Baixar arquivo
-                </a>
-            `,
-                didClose: () => {
+                title: "Exportação pronta",
+                text: "Clique em \"Baixar arquivo\" para salvar o arquivo.",
+                confirmButtonText: "Baixar arquivo",
+                showCancelButton: false,
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
                     URL.revokeObjectURL(url);
-                },
-                showConfirmButton: false,
+                } else {
+                    // se o usuário fechar sem baixar, libera o blob também
+                    URL.revokeObjectURL(url);
+                }
             });
 
         } catch (err) {
@@ -1457,7 +1468,7 @@ export default function MapBoxComponent() {
             projectDescription: description,
             uf,
             municipio,
-            outFormat: "kmz",
+            outFormat: "kml",
             persist: true,       // 👈 SALVAR no backend
             downloadFile: false, // 👈 NÃO baixar arquivo
         });
@@ -1470,7 +1481,7 @@ export default function MapBoxComponent() {
             projectDescription: description,
             uf,
             municipio,
-            outFormat: "kmz",
+            outFormat: "kml",
             persist: false,      // 👈 NÃO salvar no backend
             downloadFile: true,  // 👈 SÓ baixar o arquivo
         });
