@@ -1,10 +1,18 @@
 import React from "react";
-import { GeoJSON, Pane } from "react-leaflet";
+import { GeoJSON } from "react-leaflet";
 import * as turf from "@turf/turf";
 
 /**
- * Camadas de Ruas (editáveis) + Máscara (sempre visível).
- * Importante: só escuta "pm:remove" (e não "remove") pra não apagar no re-render.
+ * Camadas de Ruas (editáveis) + Máscara.
+ *
+ * Regras:
+ * - Linha de rua: editável, clicável, deletável.
+ * - Máscara: não é editável, mas pode ser deletada em modo "remoção" do Geoman.
+ *   Ao deletar a máscara, removemos a rua associada via onRuaRemoved(uid).
+ *
+ * IMPORTANTE:
+ *  - Para a máscara deletar só a rua correta, cada feature de ruaMask
+ *    precisa ter `properties._rua_uid` setado no hook useRuas.
  */
 export default function Ruas({
     ruas = [],
@@ -26,20 +34,36 @@ export default function Ruas({
 }) {
     return (
         <>
-            {/* Máscara de RUAS — sempre visível se existir */}
+            {/* Máscara de RUAS — visual, mas deletável em modo remoção */}
             {ruaMask && (
                 <GeoJSON
                     key={`ruaMask-${Math.round(turf.area(ruaMask))}`}
                     pane={paneMask}
                     data={ruaMask}
                     style={() => maskStyle}
-                    eventHandlers={{
-                        add: (e) => {
-                            try {
-                                e.target.options.pmIgnore = true;
-                                e.target.bringToFront?.();
-                            } catch { }
-                        },
+                    // Ela não é "editável", mas precisa ser interativa para receber pm:remove
+                    onEachFeature={(feature, layer) => {
+                        try {
+                            // Geoman não deve tentar editar a máscara
+                            layer.options.pmIgnore = false;
+
+                            // Quando usuário estiver em modo remoção e clicar na máscara,
+                            // o Geoman dispara "pm:remove". Aqui ligamos isso a onRuaRemoved.
+                            const ruaUid =
+                                feature?.properties?._rua_uid ??
+                                feature?.properties?._uid ??
+                                null;
+
+                            const onPmRemove = () => {
+                                if (ruaUid != null) {
+                                    onRuaRemoved(ruaUid);
+                                }
+                            };
+
+                            layer.on("pm:remove", onPmRemove);
+                        } catch {
+                            // ignora erros
+                        }
                     }}
                 />
             )}
@@ -47,6 +71,7 @@ export default function Ruas({
             {/* RUAS editáveis */}
             {ruas.map((r, i) => {
                 const uid = r?.properties?._uid ?? i;
+
                 return (
                     <GeoJSON
                         pane={paneRuas}
@@ -58,36 +83,57 @@ export default function Ruas({
                             layer.once("add", () => {
                                 setTimeout(() => {
                                     try {
-                                        layer.pm?.enable?.({ snappable: true, snapDistance: 20 });
+                                        layer.pm?.enable?.({
+                                            snappable: true,
+                                            snapDistance: 20,
+                                        });
                                         layer.options.pmIgnore = false;
                                     } catch { }
                                 }, 0);
                             });
 
-                            // sync fim de edição
+                            // sync fim de edição (mover vértices, arrastar, etc.)
                             const syncEnd = () => {
                                 try {
                                     const gj = layer.toGeoJSON();
-                                    gj.properties = { ...(r.properties || {}), _uid: uid }; // preserva width_m
+                                    gj.properties = {
+                                        ...(r.properties || {}),
+                                        _uid: uid, // preserva identificador
+                                    };
                                     onRuaEdited(uid, gj);
                                 } catch (e) {
                                     console.error("[Ruas] sync rua fail:", e);
                                 }
                             };
 
-                            // Apenas eventos Geoman de término
-                            ["pm:markerdragend", "pm:editend", "pm:dragend"].forEach((ev) =>
-                                layer.on(ev, syncEnd)
+                            ["pm:markerdragend", "pm:editend", "pm:dragend"].forEach(
+                                (ev) => layer.on(ev, syncEnd)
                             );
 
-                            // Apagar rua (vínculo rua⇄máscara garantido pela recomputação)
+                            // Apagar rua (linha) – só essa rua
                             const onPmRemove = () => onRuaRemoved(uid);
                             layer.on("pm:remove", onPmRemove);
-                            // NÃO usar "remove" aqui (dispara em re-render!)
 
-                            // Clique para editar largura por rua
-                            layer.on("click", () => {
-                                const current = Number(r?.properties?.width_m ?? defaultRuaWidth);
+                            // Clique para editar largura da rua
+                            layer.on("click", (e) => {
+                                try {
+                                    const map = layer._map;
+
+                                    // Se estiver em modo de remoção global do Geoman,
+                                    // não abre prompt de largura — deixa só apagar.
+                                    if (
+                                        map?.pm?.globalRemovalEnabled &&
+                                        map.pm.globalRemovalEnabled()
+                                    ) {
+                                        return;
+                                    }
+                                } catch {
+                                    // se der erro, segue o fluxo normal
+                                }
+
+                                const current = Number(
+                                    r?.properties?.width_m ?? defaultRuaWidth
+                                );
                                 onRuaWidthPrompt(uid, current);
                             });
                         }}

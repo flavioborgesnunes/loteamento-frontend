@@ -16,6 +16,8 @@ import Parcelamento from './pages/parcelamento/Parcelamento'
 import GeomanLoteador from './pages/geoman/GeomanLoteador';
 import GerarQuarteirao from './pages/parcelamento/GerarQuarteirao';
 import ParcelamentoIA from './pages/parcelamento/ParcelamentoIA';
+import ProjetosLista from "./pages/projetos/ProjetosLista";
+import RestricoesLista from "./pages/projetos/RestricoesLista";
 
 import ParkingLayoutPage from './pages/parcelamento/teste'
 
@@ -38,6 +40,8 @@ function App() {
           <Route path="/estudo" element={<EstudoMapa />} />
           <Route path="/estudo/:id" element={<EstudoMapa />} />
           <Route path="/projetos" element={<Projetos />} />
+          <Route path="/projetos/lista" element={<ProjetosLista />} />
+          <Route path="/restricoes/lista" element={<RestricoesLista />} />
           <Route path="/loteador" element={<GeomanLoteador />} />
           <Route path="/visualizar-projetos" element={<VisualizarProjetos />} />
           <Route path="/parcelamento" element={<Parcelamento />} />

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Ellipsis, Search } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import useAxios from '../../utils/useAxios';
 import { useAuthStore } from '../../store/auth';
 import Swal from 'sweetalert2';
@@ -9,6 +9,7 @@ import NovoEstudo from './images/projeto-novo-estudo.png';
 
 function Projetos() {
     const api = useAxios();
+    const navigate = useNavigate();
     const [projetos, setProjetos] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
@@ -19,6 +20,8 @@ function Projetos() {
 
     const [openProjMenuId, setOpenProjMenuId] = useState(null);
     const [openRestrMenuId, setOpenRestrMenuId] = useState(null);
+
+    const GEOMAN_PATH = "/loteador";
 
     // ==== FILTRO DE RESTRIÇÕES ====
     const restricoesFiltradas = useMemo(() => {
@@ -125,9 +128,16 @@ function Projetos() {
                     <p className="text-sm text-gray-500">
                         Mostrando {visibleProjects.length} de {projetos.length} projetos
                     </p>
+                    <Link
+                        to="/projetos/lista"
+                        className="mt-1 inline-flex text-xs text-[#00BBF2] hover:underline"
+                    >
+                        Ver todos os projetos →
+                    </Link>
                 </div>
 
                 <div className="flex items-center gap-2 max-w-sm w-full">
+                    {/* (mantém sua busca igual está hoje) */}
                     <div className="relative w-full">
                         <span className="absolute left-3 top-1/2 -translate-y-1/2">
                             <Search className="w-4 h-4 text-gray-400" />
@@ -142,6 +152,7 @@ function Projetos() {
                     </div>
                 </div>
             </div>
+
 
             {/* ===================== GRID DE PROJETOS ===================== */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-5">
@@ -200,7 +211,9 @@ function Projetos() {
                                             type="button"
                                             className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-red-600"
                                             onClick={async () => {
+                                                // fecha o menu
                                                 setOpenProjMenuId(null);
+
                                                 const result = await Swal.fire({
                                                     title: 'Excluir projeto?',
                                                     text: `Tem certeza que deseja excluir o projeto "${proj.name || 'sem nome'}"?`,
@@ -211,14 +224,36 @@ function Projetos() {
                                                     confirmButtonText: 'Sim, excluir',
                                                     cancelButtonText: 'Cancelar',
                                                 });
-                                                if (result.isConfirmed) {
-                                                    // Aqui depois você integra com o DELETE no backend
-                                                    Swal.fire('Excluído!', 'Em breve conectamos com o backend.', 'success');
+
+                                                if (!result.isConfirmed) return;
+
+                                                try {
+                                                    // chama o backend (ajusta a URL se no seu DRF for diferente)
+                                                    await api.delete(`/projetos/${proj.id}/`);
+
+                                                    // remove o projeto da lista local
+                                                    setProjetos(prev => prev.filter(p => p.id !== proj.id));
+
+                                                    await Swal.fire({
+                                                        title: 'Excluído!',
+                                                        text: 'O projeto foi removido com sucesso.',
+                                                        icon: 'success',
+                                                        confirmButtonColor: '#16a34a',
+                                                    });
+                                                } catch (error) {
+                                                    console.error('Erro ao excluir projeto:', error);
+                                                    await Swal.fire({
+                                                        title: 'Erro',
+                                                        text: 'Não foi possível excluir o projeto. Tente novamente.',
+                                                        icon: 'error',
+                                                        confirmButtonColor: '#ef4444',
+                                                    });
                                                 }
                                             }}
                                         >
                                             Excluir
                                         </button>
+
                                     </div>
                                 )}
                             </div>
@@ -286,8 +321,15 @@ function Projetos() {
                         <p className="text-sm text-gray-500">
                             Mostrando {visibleRestricoes.length} de {restricoesFiltradas.length} versões
                         </p>
+                        <Link
+                            to="/restricoes/lista"
+                            className="mt-1 inline-flex text-xs text-[#00BBF2] hover:underline"
+                        >
+                            Todas as restrições →
+                        </Link>
                     </div>
 
+                    {/* mantém a parte da busca exatamente como está */}
                     <div className="flex items-center gap-2 max-w-sm w-full">
                         <div className="relative w-full">
                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">
@@ -332,19 +374,12 @@ function Projetos() {
                                     {/* Dropdown RESTRIÇÕES */}
                                     {openRestrMenuId === r.id && (
                                         <div className="absolute right-3 top-10 bg-white border rounded shadow-md z-20 text-sm">
-                                            {/* Editar – por enquanto só alerta */}
                                             <button
                                                 type="button"
                                                 className="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                                                onClick={async () => {
+                                                onClick={() => {
                                                     setOpenRestrMenuId(null);
-                                                    await Swal.fire({
-                                                        title: 'Editar restrição',
-                                                        text: 'Aqui você vai abrir a tela de edição dessa versão de restrições.',
-                                                        icon: 'info',
-                                                        confirmButtonColor: '#16a34a',
-                                                        confirmButtonText: 'OK',
-                                                    });
+                                                    navigate(`${GEOMAN_PATH}?restricoesId=${r.id}`);
                                                 }}
                                             >
                                                 Editar
@@ -354,8 +389,10 @@ function Projetos() {
                                             <button
                                                 type="button"
                                                 className="block w-full text-left px-4 py-2 hover:bg-gray-100 text-red-600"
-                                                onClick={async () => {
+                                                onClick={async (e) => {
+                                                    e.stopPropagation();
                                                     setOpenRestrMenuId(null);
+
                                                     const result = await Swal.fire({
                                                         title: 'Excluir versão de restrições?',
                                                         text: `Tem certeza que deseja excluir a versão v${r.version}?`,
@@ -366,23 +403,39 @@ function Projetos() {
                                                         confirmButtonText: 'Sim, excluir',
                                                         cancelButtonText: 'Cancelar',
                                                     });
-                                                    if (result.isConfirmed) {
-                                                        // Aqui depois liga com DELETE no backend
-                                                        Swal.fire('Excluída!', 'Em breve conectamos com o backend.', 'success');
+
+                                                    if (!result.isConfirmed) return;
+
+                                                    try {
+                                                        await api.delete(`/restricoes/${r.id}/`);
+
+                                                        // tira da lista local (restricoesList é o estado bruto)
+                                                        setRestricoesList(prev => prev.filter(item => item.id !== r.id));
+
+                                                        Swal.fire('Excluída!', 'A versão de restrições foi removida.', 'success');
+                                                    } catch (err) {
+                                                        console.error("[RestricoesList] erro ao excluir:", err);
+                                                        Swal.fire(
+                                                            'Erro',
+                                                            'Não foi possível excluir esta versão de restrições.',
+                                                            'error'
+                                                        );
                                                     }
                                                 }}
                                             >
                                                 Excluir
                                             </button>
+
                                         </div>
                                     )}
                                 </div>
 
                                 <div className="flex flex-col mt-4">
-                                    <h4 className="font-bold text-lg line-clamp-2">
+                                    <h4 className="font-bold text-lg mt-4 line-clamp-2 text-[#00BBF2] hover:underline" onClick={() => { navigate(`${GEOMAN_PATH}?restricoesId=${r.id}`); }}>
                                         {r.label
                                             ? `${r.label}`
                                             : `${r.project_name || "Projeto sem nome"}`}
+
                                     </h4>
 
                                     <div className="mt-3 space-y-1 text-sm">

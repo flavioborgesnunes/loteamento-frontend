@@ -156,7 +156,7 @@ function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
                 editMode: true,   // ✅ apenas essa ferramenta visível
                 dragMode: false,
                 rotateMode: false,
-                removalMode: false,
+                removalMode: true,
             });
             try {
                 map.pm.setGlobalOptions({
@@ -336,6 +336,20 @@ function safePickAxiosError(err) {
     return { isAxios, status, data, message, url, method };
 }
 
+function limparRuas() {
+    try {
+        (ruasState || []).forEach((r) => {
+            const uid = r?.properties?._uid;
+            if (uid != null) {
+                removeRua(uid);
+            }
+        });
+    } catch (e) {
+        console.error("[Geoman] erro ao limpar ruas:", e);
+    }
+}
+
+
 export default function GeomanLoteador() {
     const axiosAuth = useAxios();
     const mapRef = useRef(null);
@@ -396,6 +410,11 @@ export default function GeomanLoteador() {
     // Visibilidade por overlay (camada base) — padrão TRUE
     const [overlayVisible, setOverlayVisible] = useState({}); // { [overlayId]: bool }
 
+    // Versões de restrições do projeto atual
+    const [restricoesVersoes, setRestricoesVersoes] = useState([]);
+    const [restricaoSelId, setRestricaoSelId] = useState(null);
+
+
     // RUAS via hook separado
     const {
         ruas: ruasState,
@@ -441,6 +460,20 @@ export default function GeomanLoteador() {
     const [isProjetosOpen, setIsProjetosOpen] = useState(false);
 
     const [outFormat, setOutFormat] = useState("kmz");
+
+    // --- RESTRIÇÕES SALVAS (para editar) ---
+    const [restricoesTodas, setRestricoesTodas] = useState([]);
+    const [restricoesQuery, setRestricoesQuery] = useState("");
+    const [isRestricoesOpen, setIsRestricoesOpen] = useState(false);
+
+    const restricoesFiltradas = useMemo(() => {
+        if (!restricoesQuery.trim()) return restricoesTodas;
+        const q = restricoesQuery.toLowerCase();
+        return restricoesTodas.filter((r) =>
+            (r.label || "").toLowerCase().includes(q) ||
+            (r.project_name || "").toLowerCase().includes(q)
+        );
+    }, [restricoesTodas, restricoesQuery]);
 
 
     // Filtro dos projetos conforme o texto digitado
@@ -1007,114 +1040,231 @@ export default function GeomanLoteador() {
         };
     };
 
+    // Estilos para aparecer bonitinho no Google Earth (tokml simplestyle)
+    const ROLE_STYLES = {
+        aoi: {
+            stroke: "#3498db",
+            "stroke-width": 2,
+            "stroke-opacity": 1,
+            fill: "#3498db",
+            "fill-opacity": 0.05,
+        },
+        area_loteavel: {
+            stroke: "#1f6feb",
+            "stroke-width": 2,
+            "stroke-opacity": 1,
+            fill: "#9ecbff",
+            "fill-opacity": 0.35,
+        },
+        area_verde: {
+            stroke: "#007a4d",
+            "stroke-width": 2,
+            "stroke-opacity": 1,
+            fill: "#41d686",
+            "fill-opacity": 0.45,
+        },
+        corte_av: {
+            stroke: "#e11d48",
+            "stroke-width": 2,
+            "stroke-opacity": 1,
+            fill: "#fca5a5",
+            "fill-opacity": 0.35,
+        },
+        rua: {
+            stroke: "#555555",
+            "stroke-width": 2,
+            "stroke-opacity": 1,
+            fill: "#000000",
+            "fill-opacity": 0, // sem preenchimento pra rua
+        },
+        manual: {
+            stroke: "#d97706",
+            "stroke-width": 2,
+            "stroke-opacity": 1,
+            fill: "#fcd34d",
+            "fill-opacity": 0.3,
+        },
+        overlay: {
+            stroke: "#2f6db3",
+            "stroke-width": 1.5,
+            "stroke-opacity": 1,
+            fill: "#2f6db3",
+            "fill-opacity": 0.08,
+        },
+        margem: {
+            stroke: "#ff8800",
+            "stroke-width": 2,
+            "stroke-opacity": 1,
+            fill: "#000000",
+            "fill-opacity": 0,
+        },
+
+        rua_mask: {
+            stroke: "#4b5563",
+            "stroke-width": 1,
+            "stroke-opacity": 1,
+            fill: "#9ca3af",
+            "fill-opacity": 0.4,
+        },
+    };
+
+    function withRoleStyle(role, baseProps = {}) {
+        const style = ROLE_STYLES[role] || {};
+        return { ...baseProps, role, ...style };
+    }
+
+
     // ---------- GEOJSON para exportar KML/KMZ (frontend) ----------
     const buildExportGeoJSON = () => {
         const features = [];
 
-        // AOI
+        // 1) AOI
         if (aoi?.geometry) {
             features.push({
                 type: "Feature",
                 geometry: aoi.geometry,
-                properties: { role: "aoi" },
+                properties: withRoleStyle("aoi", {
+                    name: "AOI",
+                }),
             });
         }
 
-        // Área loteável (se existir)
+        // 2) Área loteável (se existir)
         if (areaLoteavel?.geometry) {
             features.push({
                 type: "Feature",
                 geometry: areaLoteavel.geometry,
-                properties: { role: "area_loteavel" },
+                properties: withRoleStyle("area_loteavel", {
+                    name: "Área loteável",
+                }),
             });
         }
 
-        // Áreas verdes
-        (areasVerdes || []).forEach((f) => {
+        // 3) Áreas verdes
+        (areasVerdes || []).forEach((f, idx) => {
             if (!f?.geometry) return;
+            const props = f.properties || {};
+            const nm = props.name || props.label || `Área verde ${idx + 1}`;
             features.push({
                 type: "Feature",
                 geometry: f.geometry,
-                properties: {
-                    ...(f.properties || {}),
-                    role: "area_verde",
-                },
+                properties: withRoleStyle("area_verde", {
+                    ...props,
+                    name: nm,
+                }),
             });
         });
 
-        // Cortes
-        (cortes || []).forEach((f) => {
+        // 4) Cortes
+        (cortes || []).forEach((f, idx) => {
             if (!f?.geometry) return;
+            const props = f.properties || {};
+            const nm = props.name || props.label || `Corte área verde ${idx + 1}`;
             features.push({
                 type: "Feature",
                 geometry: f.geometry,
-                properties: {
-                    ...(f.properties || {}),
-                    role: "corte_av",
-                },
+                properties: withRoleStyle("corte_av", {
+                    ...props,
+                    name: nm,
+                }),
             });
         });
 
-        // Ruas (eixo)
-        (ruasState || []).forEach((f) => {
+        // 5) Ruas (eixo)
+        (ruasState || []).forEach((f, idx) => {
             if (!f?.geometry) return;
+            const props = f.properties || {};
+            const largura =
+                Number.isFinite(+props.width_m)
+                    ? +props.width_m
+                    : Number.isFinite(+defaultRuaWidth)
+                        ? +defaultRuaWidth
+                        : 12;
+            const nm = props.name || `Rua ${idx + 1} (${largura} m)`;
             features.push({
                 type: "Feature",
                 geometry: f.geometry,
-                properties: {
-                    ...(f.properties || {}),
-                    role: "rua",
-                    width_m: Number.isFinite(+f?.properties?.width_m)
-                        ? +f.properties.width_m
-                        : Number.isFinite(+defaultRuaWidth)
-                            ? +defaultRuaWidth
-                            : 12,
-                },
+                properties: withRoleStyle("rua", {
+                    ...props,
+                    name: nm,
+                    width_m: largura,
+                }),
             });
         });
 
-        // Restrições manuais (polígonos + círculos convertidos)
-        (restrManuais || []).forEach((f) => {
-            if (!f?.geometry) return;
-            features.push({
-                type: "Feature",
-                geometry: f.geometry,
-                properties: {
-                    ...(f.properties || {}),
-                    role: "manual",
-                },
-            });
-        });
-
-        // Overlays do backend (apenas os visíveis, pra não sujar demais)
-        Object.entries(extrasByOverlay || {}).forEach(([overlayId, pack]) => {
-            if (!overlayVisible[overlayId]) return;
-            (pack.features || []).forEach((f) => {
+        // 5.1) Máscara de ruas (buffers) – se existir
+        if (ruaMask?.features?.length) {
+            ruaMask.features.forEach((f, idx) => {
                 if (!f?.geometry) return;
+                const props = f.properties || {};
+                const nm =
+                    props.name ||
+                    `Máscara rua ${props._rua_uid != null ? props._rua_uid : idx + 1}`;
                 features.push({
                     type: "Feature",
                     geometry: f.geometry,
-                    properties: {
-                        ...(f.properties || {}),
-                        role: "overlay",
+                    properties: withRoleStyle("rua_mask", {
+                        ...props,
+                        name: nm,
+                    }),
+                });
+            });
+        }
+
+        // 6) Restrições manuais (polígonos + círculos convertidos)
+        (restrManuais || []).forEach((f, idx) => {
+            if (!f?.geometry) return;
+            const props = f.properties || {};
+            const nm = props.name || props.label || `Restrição manual ${idx + 1}`;
+            features.push({
+                type: "Feature",
+                geometry: f.geometry,
+                properties: withRoleStyle("manual", {
+                    ...props,
+                    name: nm,
+                }),
+            });
+        });
+
+        // 7) Overlays do backend (apenas os visíveis)
+        Object.entries(extrasByOverlay || {}).forEach(([overlayId, pack]) => {
+            if (!overlayVisible[overlayId]) return;
+            (pack.features || []).forEach((f, idx) => {
+                if (!f?.geometry) return;
+                const props = f.properties || {};
+                const nm =
+                    props.name ||
+                    props.label ||
+                    `Overlay ${overlayId} #${idx + 1}`;
+                features.push({
+                    type: "Feature",
+                    geometry: f.geometry,
+                    properties: withRoleStyle("overlay", {
+                        ...props,
+                        name: nm,
                         overlay_id: overlayId,
-                    },
+                    }),
                 });
             });
         });
 
-        // Margens (se quiser levar pro KML também)
+        // 8) Margens
         Object.entries(marginGeoByOverlay || {}).forEach(([overlayId, fc]) => {
-            (fc?.features || []).forEach((f) => {
+            (fc?.features || []).forEach((f, idx) => {
                 if (!f?.geometry) return;
+                const props = f.properties || {};
+                const nm =
+                    props.name ||
+                    props.label ||
+                    `Margem ${overlayId} #${idx + 1}`;
                 features.push({
                     type: "Feature",
                     geometry: f.geometry,
-                    properties: {
-                        ...(f.properties || {}),
-                        role: "margem",
+                    properties: withRoleStyle("margem", {
+                        ...props,
+                        name: nm,
                         overlay_id: overlayId,
-                    },
+                    }),
                 });
             });
         });
@@ -1127,134 +1277,520 @@ export default function GeomanLoteador() {
 
 
 
+
     async function salvarRestricoesVersao() {
         if (!projetoSel) {
-            showAlert("Selecione um projeto antes de salvar as restrições.", {
+            Swal.fire({
                 icon: "warning",
-                title: "Projeto não selecionado",
-            }); return;
+                title: "Selecione um projeto",
+                text: "Você precisa selecionar um projeto antes de salvar restrições.",
+            });
+            return;
         }
-        setIsSaving(true);
+
         try {
+            setIsSaving(true);
+
             const payload = {
                 label: labelVersao || "",
                 notes: "gerado no Geoman",
-                percent_permitido: Number(percentPermitido || 0),
+                percent_permitido: Number(percentPermitido || 0) || null,
+                corte_pct_cache: cortePct ?? null,
                 source: "geoman",
                 adHoc: buildAdHocRestricoes(),
             };
-            console.log("[DEBUG payload]", payload);
 
-            console.log("manuais features:", payload?.adHoc?.manuais?.features?.length);
+            let resp;
+            if (restricaoSelId) {
+                // EDITAR restrição existente (PUT /restricoes/<id>/)
+                resp = await axiosAuth.put(
+                    `/restricoes/${restricaoSelId}/`,
+                    payload
+                );
+                Swal.fire({
+                    icon: "success",
+                    title: "Versão atualizada",
+                    text: `Restrição #${restricaoSelId} atualizada com sucesso.`,
+                });
+            } else {
+                // CRIAR nova versão para o projeto (POST /projetos/<id>/restricoes/)
+                resp = await axiosAuth.post(
+                    `/projetos/${projetoSel}/restricoes/`,
+                    payload
+                );
+                const data = resp.data;
+                Swal.fire({
+                    icon: "success",
+                    title: "Versão salva",
+                    text: `Versão v${data.version} criada para o projeto.`,
+                });
+                // coloca o id recém criado como selecionado, se quiser
+                if (data.id) {
+                    setRestricaoSelId(data.id);
+                    syncUrlRestricoes(data.id);
+                }
+            }
 
-            const { data } = await axiosAuth.post(`/projetos/${projetoSel}/restricoes/`, payload);
-            showAlert(`Versão salva: v${data.version}`, {
-                icon: "success",
-                title: "Versão salva com sucesso",
-            });
-
+            // recarrega a lista de versões do projeto atual
+            await carregarVersoesRestricoes(projetoSel);
         } catch (e) {
-            console.error("[salvar restrições] erro:", safePickAxiosError(e));
-            showAlert("Erro ao salvar as restrições.", {
+            console.error("[salvar restrições] erro:", e);
+            Swal.fire({
                 icon: "error",
                 title: "Erro ao salvar",
+                text: "Não foi possível salvar as restrições.",
             });
         } finally {
             setIsSaving(false);
         }
     }
 
-    async function exportarKmlKmz() {
-        if (!aoi?.geometry) {
-            showAlert("Desenhe ou carregue uma AOI antes de exportar.", {
+    async function deletarRestricaoAtual() {
+        if (!restricaoSelId) {
+            Swal.fire({
                 icon: "warning",
-                title: "AOI obrigatória",
+                title: "Nenhuma versão selecionada",
+                text: "Selecione uma versão de restrições para excluir.",
             });
             return;
         }
 
+        const confirm = await Swal.fire({
+            icon: "warning",
+            title: "Excluir esta versão?",
+            text: "Essa ação não pode ser desfeita.",
+            showCancelButton: true,
+            confirmButtonText: "Sim, excluir",
+            cancelButtonText: "Cancelar",
+            confirmButtonColor: "#dc2626",
+            cancelButtonColor: "#6b7280",
+        });
+
+        if (!confirm.isConfirmed) return;
+
+        try {
+            await axiosAuth.delete(`/restricoes/${restricaoSelId}/`);
+
+            Swal.fire({
+                icon: "success",
+                title: "Versão excluída",
+            });
+
+            // remove da lista local
+            setRestricoesVersoes((prev) =>
+                prev.filter((r) => r.id !== restricaoSelId)
+            );
+
+            // Se também estiver na lista global de restrições do dono
+            setRestricoesTodas((prev) =>
+                prev.filter((r) => r.id !== restricaoSelId)
+            );
+
+            // limpa seleção e URL
+            setRestricaoSelId(null);
+            syncUrlRestricoes(null);
+
+            // limpa mapa (ou recarrega o projeto base)
+            setAreasVerdes([]);
+            setCortes([]);
+            setRestrManuais([]);
+            setAreaLoteavel(null);
+            setAoi(null);
+            avLayerByUid.current = new Map();
+            corteLayerByUid.current = new Map();
+            setMarginGeoByOverlay({});
+            setMarginUiByOverlay({});
+            setMarginVersionByOverlay({});
+            setExtrasByOverlay({});
+            setOverlayVisible({});
+
+            // se quiser, recarrega o projeto base
+            if (projetoSel) {
+                abrirProjeto(projetoSel);
+            }
+        } catch (e) {
+            console.error("[Geoman] erro ao excluir restrição:", e);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao excluir",
+                text: "Não foi possível excluir esta versão de restrições.",
+            });
+        }
+    }
+
+
+
+
+    async function exportarKmlKmz() {
+        // 1) Garante que tem alguma geometria pra exportar
         const fc = buildExportGeoJSON();
-        if (!fc.features.length) {
-            showAlert("Não há geometrias para exportar.", {
+        if (!fc?.features?.length) {
+            Swal.fire({
                 icon: "warning",
                 title: "Nada para exportar",
+                text: "Não há geometrias no mapa para exportar.",
             });
             return;
         }
 
+        // 2) Converte o FeatureCollection em string KML
         let kmlString;
         try {
             kmlString = tokml(fc, {
                 name: "name",
                 description: "description",
+                simplestyle: true,   // <- isso faz o tokml ler stroke/fill/etc.
             });
+
         } catch (e) {
             console.error("[exportarKmlKmz] erro ao gerar KML:", e);
-            showAlert("Erro ao gerar o KML no frontend.", {
+            Swal.fire({
                 icon: "error",
                 title: "Erro na conversão",
+                text: "Erro ao gerar o KML no frontend.",
             });
             return;
         }
 
-        let blob;
-        let filenameBase = "restricoes";
+        // 3) Define nome base do arquivo (se tiver projeto selecionado, usa o nome)
+        let filenameBase = "restricoes_mapa";
         if (projetoSel) {
-            const p = projetos.find((p) => p.id === projetoSel);
-            if (p?.name) {
-                filenameBase = p.name
-                    .normalize("NFD")
-                    .replace(/[\u0300-\u036f]/g, "")
-                    .replace(/[^a-zA-Z0-9_-]+/g, "_")
-                    .toLowerCase();
+            const p = projetos.find((proj) => proj.id === projetoSel);
+            if (p) {
+                filenameBase = (p.name || `projeto_${projetoSel}`) + "_restricoes";
             }
         }
 
         try {
-            if (outFormat === "kmz") {
+            let blob;
+            let filename;
+
+            if (outFormat === "kml") {
+                // Exporta KML simples
+                blob = new Blob([kmlString], {
+                    type: "application/vnd.google-earth.kml+xml",
+                });
+                filename = `${filenameBase}.kml`;
+            } else {
+                // Exporta KMZ (zip com doc.kml dentro)
                 const zip = new JSZip();
                 zip.file("doc.kml", kmlString);
                 const content = await zip.generateAsync({ type: "blob" });
                 blob = content;
-            } else {
-                blob = new Blob([kmlString], {
-                    type: "application/vnd.google-earth.kml+xml",
+                filename = `${filenameBase}.kmz`;
+            }
+
+            // 4) Dispara o download
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error("[exportarKmlKmz] erro final:", e);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao exportar",
+                text: "Não foi possível gerar o arquivo KML/KMZ.",
+            });
+        }
+    }
+
+
+
+    async function carregarVersoesRestricoes(projectId) {
+        setRestricoesVersoes([]);
+        setRestricaoSelId(null);
+
+        if (!projectId) return;
+
+        try {
+            const { data: list } = await axiosAuth.get(
+                `/projetos/${projectId}/restricoes/list/`
+            );
+            setRestricoesVersoes(list || []);
+        } catch (e) {
+            console.error("[Geoman] Erro ao carregar versões de restrições:", e);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao carregar restrições",
+                text: "Não foi possível carregar as versões de restrições deste projeto.",
+            });
+        }
+    }
+
+
+    useEffect(() => {
+        // sempre que trocar o projeto, recarrega as versões de restrições
+        if (projetoSel) {
+            carregarVersoesRestricoes(projetoSel);
+        } else {
+            setRestricoesVersoes([]);
+            setRestricaoSelId(null);
+        }
+    }, [projetoSel]);
+
+    // Se a URL já vier com ?restricoesId=123, abre essa versão automaticamente
+    useEffect(() => {
+        try {
+            const url = new URL(window.location.href);
+            const rid = url.searchParams.get("restricoesId");
+            if (rid) {
+                const idNum = Number(rid);
+                if (Number.isFinite(idNum)) {
+                    abrirVersaoRestricoes(idNum);
+                }
+            }
+        } catch {
+            // ignora erro de URL
+        }
+    }, []);
+
+    async function abrirVersaoRestricoes(restricoesId) {
+        if (!restricoesId) return;
+
+        try {
+            const { data } = await axiosAuth.get(`/restricoes/${restricoesId}/geo/`);
+
+            // 1) Garante que o projeto dessa restrição está selecionado
+            if (data.project_id) {
+                setProjetoSel(data.project_id);
+                const p = projetos.find((pp) => pp.id === data.project_id);
+                if (p) {
+                    setProjetoQuery(p.name || `Projeto #${p.id}`);
+                }
+            }
+
+            // 2) Limpa estados atuais (mapa "zerado" antes de aplicar a versão)
+            setAoi(null);
+            setAreaLoteavel(null);
+            setAreasVerdes([]);
+            setCortes([]);
+            setRestrManuais([]);
+            avLayerByUid.current = new Map();
+            corteLayerByUid.current = new Map();
+
+            // limpa ruas
+            try {
+                (ruasState || []).forEach((r) => {
+                    const uid = r?.properties?._uid;
+                    if (uid != null) {
+                        removeRua(uid);
+                    }
+                });
+            } catch { }
+
+            // limpa overlays + margens
+            setExtrasByOverlay({});
+            setOverlayVisible({});
+            setMarginUiByOverlay({});
+            setMarginGeoByOverlay({});
+            setMarginVersionByOverlay({});
+
+            const acc = [];
+
+            // 3) AOI
+            if (data.aoi) {
+                const aoiFeat = featureWithOriginal(
+                    { type: "Feature", geometry: data.aoi },
+                    "geojson"
+                );
+                setAoi(aoiFeat);
+                setAoiAreaM2(areaM2Of(aoiFeat));
+                acc.push(aoiFeat);
+            }
+
+            // 4) Área loteável (se existir)
+            if (data.area_loteavel?.features?.length) {
+                const feat = data.area_loteavel.features[0];
+                const loteavelFeat = featureWithOriginal(feat, "geojson");
+                setAreaLoteavel(loteavelFeat);
+                acc.push(...data.area_loteavel.features);
+            }
+
+            // 5) Áreas verdes (av)
+            if (data.av?.features?.length) {
+                data.av.features.forEach((f) => {
+                    addAreaVerdeFromGJ(f);
+                    acc.push(f);
                 });
             }
+
+            // 6) Cortes (corte_av)
+            if (data.corte_av?.features?.length) {
+                data.corte_av.features.forEach((f) => {
+                    addCorteFromGJ(f);
+                    acc.push(f);
+                });
+            }
+
+            // 7) Ruas (ruas_eixo)
+            if (data.ruas_eixo?.features?.length) {
+                data.ruas_eixo.features.forEach((f) => {
+                    const w = Number(f?.properties?.width_m);
+                    const largura = Number.isFinite(w) && w > 0 ? w : defaultRuaWidth;
+                    addRuaFromGJ(f, largura);
+                    acc.push(f);
+                });
+            }
+
+            // 8) Restrições manuais (manuais)
+            if (data.manuais?.features?.length) {
+                const listaManuais = data.manuais.features.map((f, idx) => ({
+                    type: "Feature",
+                    geometry: f.geometry,
+                    properties: {
+                        ...(f.properties || {}),
+                        _uid: f.properties?._uid ?? `m-${restricoesId}-${idx}`,
+                        role: "manual",
+                    },
+                }));
+                setRestrManuais(listaManuais);
+                acc.push(...data.manuais.features);
+            }
+
+            // 9) RIOS / LT / FERROVIAS -> overlays + margens
+            const newExtras = {};
+            const newOverlayVisible = {};
+            const newMarginUi = {};
+            const newMarginGeo = {};
+            const newMarginVer = {};
+
+            const addOverlayFromCenterline = (
+                centerFc,
+                faixaFc,
+                overlayId,
+                color,
+                defaultDist
+            ) => {
+                if (!centerFc?.features?.length) return;
+
+                // overlay (eixo)
+                newExtras[overlayId] = {
+                    features: centerFc.features.map((f) =>
+                        featureWithOriginal(f, "geojson")
+                    ),
+                    color,
+                };
+                newOverlayVisible[overlayId] = true;
+
+                // distância default da margem
+                let dist = defaultDist;
+                const firstProps = centerFc.features[0].properties || {};
+                if (Number.isFinite(+firstProps.margem_m) && +firstProps.margem_m > 0) {
+                    dist = +firstProps.margem_m;
+                }
+                newMarginUi[overlayId] = { dist, show: true };
+
+                // faixa salva no backend (margem) → entra direto como marginGeoByOverlay
+                if (faixaFc?.features?.length) {
+                    newMarginGeo[overlayId] = toFeatureCollection(faixaFc);
+                    newMarginVer[overlayId] = 1;
+                    acc.push(...faixaFc.features);
+                }
+
+                // também soma os eixos pro zoom geral
+                acc.push(...centerFc.features);
+            };
+
+            // mesmos defaults que você usa no buildAdHocRestricoes
+            addOverlayFromCenterline(
+                data.rios_centerline,
+                data.rios_faixa,
+                "rios",
+                "#1d4ed8",
+                30
+            );
+            addOverlayFromCenterline(
+                data.lt_centerline,
+                data.lt_faixa,
+                "lt",
+                "#dc2626",
+                15
+            );
+            addOverlayFromCenterline(
+                data.ferrovias_centerline,
+                data.ferrovias_faixa,
+                "ferrovias",
+                "#16a34a",
+                20
+            );
+
+            setExtrasByOverlay(newExtras);
+            setOverlayVisible(newOverlayVisible);
+            setMarginUiByOverlay(newMarginUi);
+            setMarginGeoByOverlay(newMarginGeo);
+            setMarginVersionByOverlay(newMarginVer);
+
+            // 10) Marca restrição selecionada + URL
+            setRestricaoSelId(restricoesId);
+            syncUrlRestricoes(restricoesId);
+
+            // 11) Dá ZOOM em tudo que carregou
+            if (mapRef.current && acc.length) {
+                const fc = {
+                    type: "FeatureCollection",
+                    features: acc.map((f) =>
+                        f.type === "Feature"
+                            ? f
+                            : {
+                                type: "Feature",
+                                geometry: f.geometry || f,
+                                properties: f.properties || {},
+                            }
+                    ),
+                };
+                fitToFeatures(mapRef.current, fc);
+            }
+
+            // 12) Recalcula métricas (área verde, corte, etc.)
+            setTimeout(() => {
+                try {
+                    recalcRef.current?.();
+                } catch { }
+            }, 0);
         } catch (e) {
-            console.error("[exportarKmlKmz] erro ao gerar blob:", e);
-            showAlert("Erro ao gerar o arquivo para download.", {
+            console.error("[Geoman] Erro ao abrir versão de restrições:", e);
+            Swal.fire({
                 icon: "error",
-                title: "Erro na exportação",
+                title: "Erro ao abrir restrição",
+                text: "Não foi possível abrir a versão selecionada.",
             });
-            return;
         }
-
-        const ext = outFormat === "kmz" ? "kmz" : "kml";
-        const filename = `${filenameBase || "restricoes"}.${ext}`;
-        const url = URL.createObjectURL(blob);
-
-        // ❤️ SWEETALERT REFEITO – MESMO ESTILO DO RESTANTE
-        Swal.fire({
-            icon: "success",
-            title: "Exportação pronta!",
-            text: "Clique no botão abaixo para baixar o arquivo.",
-            confirmButtonText: "Baixar arquivo",
-            confirmButtonColor: "#2563eb",
-            showCancelButton: false,
-            allowOutsideClick: true,
-            willClose: () => {
-                // quando fechar, já dispara o download
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
-            },
-        });
     }
+
+    // Carrega todas as restrições do DONO (para o autocomplete "Editar restrições")
+    async function carregarRestricoesDoDono() {
+        try {
+            const { data } = await axiosAuth.get("/restricoes/todas-do-dono/");
+            setRestricoesTodas(data || []);
+        } catch (e) {
+            console.error("[Geoman] erro ao listar restrições do dono:", e);
+            Swal.fire({
+                icon: "error",
+                title: "Erro ao carregar restrições",
+                text: "Não foi possível carregar as restrições salvas.",
+            });
+        }
+    }
+
+    // Mantém o ID da restrição na URL (?restricoesId=123) para poder compartilhar o link
+    const syncUrlRestricoes = useCallback((restricoesId) => {
+        try {
+            const url = new URL(window.location.href);
+            if (restricoesId) {
+                url.searchParams.set("restricoesId", String(restricoesId));
+            } else {
+                url.searchParams.delete("restricoesId");
+            }
+            window.history.replaceState({}, "", url.toString());
+        } catch {
+            // se der erro, ignora
+        }
+    }, []);
 
 
     // ======= RENDER =======
@@ -1279,22 +1815,9 @@ export default function GeomanLoteador() {
                 )}
             </button>
 
-
-
-            {/* <div className="absolute z-[1000] bottom-70 flex items-center w-100 gap-4 text-sm bg-white/60 rounded-lg px-3 py-2">
-                    <div className="space-y-0.5">
-                        <div className="font-medium">AOI</div>
-                        <div>{(aoiAreaM2 / 1e6).toFixed(4)} km² • {(aoiAreaM2 / 10000).toFixed(2)} ha • {aoiAreaM2.toFixed(0)} m²</div>
-                    </div>
-                    <div className="w-px h-6 bg-gray-300" />
-                    <div className="space-y-0.5">
-                        <div className="font-medium">Área Loteável</div>
-                        <div>{(loteavelAreaM2 / 1e6).toFixed(4)} km² • {(loteavelAreaM2 / 10000).toFixed(2)} ha • {loteavelAreaM2.toFixed(0)} m²</div>
-                    </div>
-                </div> */}
-
             {/* Painel principal (projetos / AV / Ruas / Loteável) */}
-            <div className="absolute z-[1000] bottom-50 left-2 bg-white/80 rounded-xl shadow p-3 space-y-3 max-w-[1080px]">
+            <div className={`absolute z-[1000] ${isFullscreen ? "bottom-5" : "bottom-30"
+                } left-2 bg-white/80 rounded-xl shadow p-3 space-y-3 max-w-[1080px]`}>
                 <div className=" flex flex-col items-start gap-2">
                     <div
                         className="relative w-full"
@@ -1307,7 +1830,7 @@ export default function GeomanLoteador() {
                     >
                         <input
                             className="border p-2 rounded w-full text-sm"
-                            placeholder="Abrir projeto salvo…"
+                            placeholder="Criar restrições (escolha um projeto)…"
                             value={projetoQuery}
                             onFocus={() => setIsProjetosOpen(true)}
                             onChange={(e) => {
@@ -1323,11 +1846,16 @@ export default function GeomanLoteador() {
                                         key={p.id}
                                         type="button"
                                         className="w-full text-left px-2 py-1 text-sm hover:bg-gray-100"
-                                        onMouseDown={(e) => e.preventDefault()} // não perder o foco antes do click
+                                        onMouseDown={(e) => e.preventDefault()}
                                         onClick={() => {
                                             setProjetoSel(p.id);
                                             setProjetoQuery(p.name || `Projeto #${p.id}`);
                                             setIsProjetosOpen(false);
+
+                                            // modo CRIAR: limpa restrição selecionada
+                                            setRestricaoSelId(null);
+                                            syncUrlRestricoes(null);
+
                                             abrirProjeto(p.id);
                                         }}
                                     >
@@ -1343,6 +1871,77 @@ export default function GeomanLoteador() {
                             </div>
                         )}
                     </div>
+                    {/* Autocomplete para EDITAR restrições salvas */}
+                    <div
+                        className="relative w-full mt-2"
+                        tabIndex={-1}
+                        onBlur={(e) => {
+                            if (!e.currentTarget.contains(e.relatedTarget)) {
+                                setIsRestricoesOpen(false);
+                            }
+                        }}
+                    >
+                        <input
+                            className="border p-2 rounded w-full text-sm"
+                            placeholder="Editar restrições salvas…"
+                            value={restricoesQuery}
+                            onFocus={() => {
+                                setIsRestricoesOpen(true);
+                                // carrega a lista apenas na primeira vez, se ainda estiver vazia
+                                if (!restricoesTodas.length) {
+                                    carregarRestricoesDoDono();
+                                }
+                            }}
+                            onChange={(e) => {
+                                setRestricoesQuery(e.target.value);
+                                setIsRestricoesOpen(true);
+                            }}
+                        />
+
+                        {isRestricoesOpen && (
+                            <div className="absolute left-0 right-0 mt-1 max-h-56 overflow-auto border rounded bg-white z-[1200]">
+                                {restricoesFiltradas.map((r) => (
+                                    <button
+                                        key={r.id}
+                                        type="button"
+                                        className="w-full text-left px-2 py-1 text-sm hover:bg-gray-100"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => {
+                                            setIsRestricoesOpen(false);
+                                            setRestricoesQuery(
+                                                r.label ||
+                                                `Restrição #${r.id} - ${r.project_name || ""}`
+                                            );
+
+                                            // garante que o projeto selecionado é o mesmo da restrição
+                                            if (r.project) {
+                                                setProjetoSel(r.project);
+                                                setProjetoQuery(r.project_name || `Projeto #${r.project}`);
+                                            }
+
+                                            // entra em modo EDITAR
+                                            setRestricaoSelId(r.id);
+                                            syncUrlRestricoes(r.id);
+                                            abrirVersaoRestricoes(r.id);
+                                        }}
+                                    >
+                                        {r.label || `Restrição #${r.id}`}{" "}
+                                        {r.project_name && (
+                                            <span className="text-xs text-gray-500">
+                                                – {r.project_name}
+                                            </span>
+                                        )}
+                                    </button>
+                                ))}
+
+                                {!restricoesFiltradas.length && (
+                                    <div className="px-2 py-1 text-xs text-gray-500">
+                                        Nenhuma restrição encontrada
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
 
 
                     <button
@@ -1352,6 +1951,7 @@ export default function GeomanLoteador() {
                     >
                         Área Verde
                     </button>
+
                     <div className="flex  flex-col items-start gap-2 flex-wrap mt-2">
                         {/* Polígono Manual */}
                         <button
@@ -1473,7 +2073,30 @@ export default function GeomanLoteador() {
                     >
                         Desenhar Rua
                     </button>
+                    <button
+                        onClick={async () => {
+                            if (!ruasState.length) return;
+                            const res = await Swal.fire({
+                                icon: "warning",
+                                title: "Remover todas as ruas?",
+                                text: "Essa ação não pode ser desfeita.",
+                                showCancelButton: true,
+                                confirmButtonText: "Sim, remover",
+                                cancelButtonText: "Cancelar",
+                                confirmButtonColor: "#dc2626",
+                                cancelButtonColor: "#6b7280",
+                            });
+                            if (res.isConfirmed) {
+                                limparRuas();
+                            }
+                        }}
+                        className="px-3 py-2 rounded bg-red-600 text-white"
+                        title="Remover todas as ruas desenhadas"
+                    >
+                        Limpar ruas
+                    </button>
                 </div>
+
 
                 <div className="flex flex-col items-start gap-2 mt-2">
                     <input
@@ -1483,18 +2106,33 @@ export default function GeomanLoteador() {
                         value={labelVersao}
                         onChange={(e) => setLabelVersao(e.target.value)}
                     />
-                    <button
-                        onClick={salvarRestricoesVersao}
-                        disabled={!projetoSel || isSaving}
-                        className={`px-3 py-2 rounded ${(!projetoSel || isSaving)
-                            ? "bg-gray-300 text-gray-600"
-                            : "bg-emerald-700 text-white"
-                            }`}
-                        title="Salvar nova versão de restrições (AV, cortes, ruas, margens)"
-                    >
-                        {isSaving ? "Salvando..." : "Salvar versão de restrições"}
-                    </button>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={salvarRestricoesVersao}
+                            disabled={!projetoSel || isSaving}
+                            className={`px-3 py-2 rounded ${(!projetoSel || isSaving)
+                                ? "bg-gray-300 text-gray-600"
+                                : "bg-emerald-700 text-white"
+                                }`}
+                            title="Salvar nova versão de restrições (AV, cortes, ruas, margens)"
+                        >
+                            {isSaving ? "Salvando..." : "Salvar versão de restrições"}
+                        </button>
+
+                        <button
+                            onClick={deletarRestricaoAtual}
+                            disabled={!restricaoSelId}
+                            className={`px-3 py-2 rounded ${!restricaoSelId
+                                ? "bg-gray-300 text-gray-600"
+                                : "bg-red-600 text-white"
+                                }`}
+                            title="Excluir versão de restrições selecionada"
+                        >
+                            Excluir versão
+                        </button>
+                    </div>
                 </div>
+
 
                 {/* Exportar KML/KMZ (separado do salvar) */}
                 <div className="flex items-center gap-2 mt-3">
@@ -1519,7 +2157,8 @@ export default function GeomanLoteador() {
             </div>
 
             {/* Painel de Camadas do Backend (visíveis por padrão) + Margens (somente linhas) */}
-            <div className="absolute z-[1000] top-40 left-2 bg-white/80 rounded-xl shadow p-3 space-y-2 min-w-[460px] max-w-[700px]">
+            <div className={`absolute z-[1000] ${isFullscreen ? "bottom-5" : "bottom-30"
+                } left-150 bg-white/80 rounded-xl shadow p-3 space-y-2 min-w-[460px] max-w-[700px]`}>
                 <div className="flex items-center justify-between">
                     <h3 className="font-semibold">Camadas do backend</h3>
                     <button
@@ -1845,16 +2484,24 @@ export default function GeomanLoteador() {
                         defaultRuaWidth={defaultRuaWidth}
                         paneRuas="pane-ruas"
                         paneMask="pane-restricoes"
-                        onRuaEdited={(uid, gj) => updateRuaGeometry(uid, gj)}
-                        onRuaRemoved={(uid) => removeRua(uid)}
+                        onRuaEdited={(uid, gj) => {
+                            updateRuaGeometry(uid, gj);
+                            scheduleRecalc();            // recalcula área loteável após mexer na rua
+                        }}
+                        onRuaRemoved={(uid) => {
+                            removeRua(uid);              // remove rua do estado (linha + máscara)
+                            scheduleRecalc();            // recalcula área loteável após apagar
+                        }}
                         onRuaWidthPrompt={(uid, current) => {
                             const val = window.prompt("Largura desta rua (m):", String(current));
                             if (val == null) return;
                             const width = Number(val);
                             if (!Number.isFinite(width) || width <= 0) return;
                             updateRuaWidth(uid, width);
+                            scheduleRecalc();            // recalcula após mudar largura
                         }}
                     />
+
 
                     {/* Lotes */}
                     {lotes.map((l, i) => (
@@ -1895,7 +2542,20 @@ export default function GeomanLoteador() {
                                 key={`margem-${overlayId}-${(marginVersionByOverlay[overlayId] || 0)}`}
                                 data={fc}
                                 style={() => marginStyle}
-                                filter={(feat) => isValidLineGeom(feat?.geometry)}
+                                filter={(feat) => {
+                                    const g = feat?.geometry;
+                                    if (!g) return false;
+                                    const t = g.type;
+                                    if (t === "LineString" || t === "MultiLineString") {
+                                        return isValidLineGeom(g);
+                                    }
+                                    if (t === "Polygon" || t === "MultiPolygon") {
+                                        // deixa passar as faixas em área vindas do backend
+                                        return true;
+                                    }
+                                    return false;
+                                }}
+
                             />
                         ) : null
                     )}

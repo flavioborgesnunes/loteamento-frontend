@@ -76,15 +76,15 @@ const MainWrapper = () => {
                             <ItemMenu icon={LayoutDashboard} text="Dashboard" to="/dashboard" />
                             <ItemMenu icon={FileUp} text="Novo Estudo" to="/estudo" />
                             <ItemMenu icon={MapPlus} text="Restrições" to="/loteador" />
-                            <ItemMenu icon={Grid} text="Parcelamento" to="/parcelamento" />
-                            <ItemMenu icon={Grid} text="Parcelamento com I.A." to="/ia-parcelamento" />
+                            {/* <ItemMenu icon={Grid} text="Parcelamento" to="/parcelamento" /> */}
+                            <ItemMenu icon={Grid} text="Parcelamento I.A." to="/ia-parcelamento" />
                             <ItemMenu icon={MonitorDown} text="Projetos" to="/projetos" />
-                            <ItemMenu icon={Eye} text="Visualizar" to="/visualizar-projetos" />
+                            {/* <ItemMenu icon={Eye} text="Visualizar" to="/visualizar-projetos" /> */}
                             {/* <ItemMenu icon={Eye} text="Teste" to="/parcelamento/gerar-quarteirao" /> */}
                             {/* <ItemMenu icon={Brain} text="Estudo com AI" to="/ia" /> */}
                             {(user.role === 'dono' || user.role === 'adm') && (
 
-                                <ItemMenu icon={UserRoundPlus} text="Cadastra Usuário" to="/register-usuario" />
+                                <ItemMenu icon={UserRoundPlus} text="Cadastrar Usuário" to="/register-usuario" />
 
                             )}
                         </div>

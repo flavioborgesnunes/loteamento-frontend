@@ -42,73 +42,122 @@ function bufferRuaSafe(ruaFeature, widthMetersHalf) {
     }
 }
 
-/** Apenas máscara (sem AOI) — buffer padrão para todas as ruas. */
-function buildRuaRestrictionMask(ruas = [], defaultWidth = 12) {
-    const buffers = [];
+/**
+ * Cria UMA máscara (buffer) por rua, com _rua_uid nas properties.
+ * Retorna FeatureCollection (ou null se não tiver nada).
+ */
+function buildRuaRestrictionMaskPerRua(ruas = [], defaultWidth = 12) {
+    const features = [];
+
     for (const r of ruas) {
         try {
+            if (!r?.geometry) continue;
+            const uid = r?.properties?._uid;
             const w = Number(r?.properties?.width_m ?? defaultWidth);
             if (!Number.isFinite(w) || w <= 0) continue;
+
             const buf = bufferRuaSafe(r, w / 2);
-            if (buf && buf.geometry) {
-                try {
-                    buffers.push(turf.cleanCoords(buf));
-                } catch {
-                    buffers.push(buf);
-                }
-            }
-        } catch { }
-    }
-    if (!buffers.length) return null;
-    // union com tolerância leve
-    let acc = buffers[0];
-    for (let i = 1; i < buffers.length; i++) {
-        try {
-            const u = turf.union(acc, buffers[i]);
-            acc = u || acc;
-        } catch {
-            // fallback: multipolygon concatenado
-            const toMP = (f) =>
-                f.geometry.type === "Polygon"
-                    ? [f.geometry.coordinates]
-                    : f.geometry.coordinates;
-            acc = {
+            if (!buf || !buf.geometry) continue;
+
+            // garante Feature "limpa"
+            const feat = {
                 type: "Feature",
-                properties: {},
-                geometry: {
-                    type: "MultiPolygon",
-                    coordinates: [...toMP(acc), ...toMP(buffers[i])],
+                geometry: buf.geometry,
+                properties: {
+                    ...(buf.properties || {}),
+                    role: "rua_mask",
+                    width_m: w,
+                    _rua_uid: uid, // vínculo com a rua original
                 },
             };
+            features.push(feat);
+        } catch {
+            // ignora erros de rua individual
         }
     }
-    try {
-        acc = turf.cleanCoords(acc);
-    } catch { }
-    return acc;
+
+    if (!features.length) return null;
+
+    return {
+        type: "FeatureCollection",
+        features,
+    };
 }
 
-/** Máscara de ruas CLIPPADA pela AOI (robusta + fallback). */
-function buildRuaRestrictionMaskClipped(ruas = [], aoiWgs, defaultWidth = 12) {
-    const mask = buildRuaRestrictionMask(ruas, defaultWidth);
-    if (!mask) return null;
-    if (!aoiWgs) return mask;
+/**
+ * Clipa CADA máscara individualmente pela AOI, mantendo a correspondência _rua_uid.
+ */
+function buildRuaRestrictionMaskClippedPerRua(ruaMaskRaw, aoiWgs) {
+    if (!ruaMaskRaw || !aoiWgs) return null;
+    const outFeatures = [];
 
-    let out =
-        clipToAoiWgsRobusto(mask, aoiWgs, { gridDecimals: 1, shrinkMeters: 0 }) ||
-        null;
+    for (const feat of ruaMaskRaw.features || []) {
+        const maskFeat = feat;
+        if (!maskFeat?.geometry) continue;
 
-    if ((!out || turf.area(out) <= 1e-9) && booleanIntersectsSafe(mask, aoiWgs)) {
-        out = clipToAoiWgsTeimoso(mask, aoiWgs, { gridDecimals: 1 }) || null;
+        let clipped = null;
+
+        try {
+            clipped =
+                clipToAoiWgsRobusto(maskFeat, aoiWgs, {
+                    gridDecimals: 1,
+                    shrinkMeters: 0,
+                }) || null;
+        } catch {
+            clipped = null;
+        }
+
+        if (
+            (!clipped || turf.area(clipped) <= 1e-9) &&
+            booleanIntersectsSafe(maskFeat, aoiWgs)
+        ) {
+            try {
+                clipped =
+                    clipToAoiWgsTeimoso(maskFeat, aoiWgs, {
+                        gridDecimals: 1,
+                    }) || null;
+            } catch {
+                clipped = null;
+            }
+        }
+
+        if (!clipped || turf.area(clipped) <= 1e-9) {
+            try {
+                clipped = clipToAoiWgs_PlanarNoProj(maskFeat, aoiWgs) || null;
+            } catch {
+                clipped = null;
+            }
+        }
+
+        if (!clipped || turf.area(clipped) <= 1e-9) {
+            try {
+                clipped = turf.intersect(maskFeat, aoiWgs) || null;
+            } catch {
+                clipped = null;
+            }
+            if (clipped) {
+                try {
+                    clipped = turf.cleanCoords(clipped);
+                } catch { }
+            }
+        }
+
+        if (clipped && clipped.geometry) {
+            // preserva _rua_uid e demais properties
+            clipped.properties = {
+                ...(maskFeat.properties || {}),
+                ...(clipped.properties || {}),
+            };
+            outFeatures.push(clipped);
+        }
     }
-    if (!out || turf.area(out) <= 1e-9) {
-        out = clipToAoiWgs_PlanarNoProj(mask, aoiWgs) || null;
-    }
-    if (!out || turf.area(out) <= 1e-9) {
-        try { out = turf.intersect(mask, aoiWgs) || null; } catch { }
-        try { if (out) out = turf.cleanCoords(out); } catch { }
-    }
-    return out || null;
+
+    if (!outFeatures.length) return null;
+
+    return {
+        type: "FeatureCollection",
+        features: outFeatures,
+    };
 }
 
 /**
@@ -125,24 +174,29 @@ export default function useRuas({ aoiForClip }) {
 
     const recomputeMask = useCallback(() => {
         try {
-            const raw = buildRuaRestrictionMask(ruas, defaultRuaWidth) || null;
-            setRuaMaskRaw(raw);
+            // 1) Máscara bruta: uma feature por rua
+            const rawFc = buildRuaRestrictionMaskPerRua(ruas, defaultRuaWidth) || null;
+            setRuaMaskRaw(rawFc);
 
-            const clipped =
-                raw && aoiForClip
-                    ? buildRuaRestrictionMaskClipped(ruas, aoiForClip, defaultRuaWidth)
+            // 2) Máscara clipada por AOI (por feature)
+            const clippedFc =
+                rawFc && aoiForClip
+                    ? buildRuaRestrictionMaskClippedPerRua(rawFc, aoiForClip)
                     : null;
-            setRuaMaskClip(clipped);
+            setRuaMaskClip(clippedFc);
 
             const AREA_MIN = 1e-6;
-            const visibleMask =
-                aoiForClip && clipped && turf.area(clipped) > AREA_MIN ? clipped : raw || null;
-            setRuaMask(visibleMask);
+            const visible =
+                aoiForClip && clippedFc && turf.area(clippedFc) > AREA_MIN
+                    ? clippedFc
+                    : rawFc || null;
+
+            setRuaMask(visible);
 
             // logs úteis
-            if (raw) describeFeature("ruaMask_raw", raw);
+            if (rawFc) describeFeature("ruaMask_raw_FC", rawFc);
             if (aoiForClip) describeFeature("aoi_clip", aoiForClip);
-            if (visibleMask) describeFeature("ruaMask_visible", visibleMask);
+            if (visible) describeFeature("ruaMask_visible_FC", visible);
         } catch (e) {
             console.error("[useRuas] erro ao recomputar máscara:", e);
             setRuaMaskRaw(null);
@@ -179,7 +233,16 @@ export default function useRuas({ aoiForClip }) {
         setRuas((prev) =>
             prev.map((it, idx) => {
                 const itUid = it?.properties?._uid ?? idx;
-                return itUid === uid ? { ...newGJ, properties: { ...(newGJ.properties || {}), _uid: uid, role: "rua", width_m: it?.properties?.width_m ?? 12 } } : it;
+                if (itUid !== uid) return it;
+                return {
+                    ...newGJ,
+                    properties: {
+                        ...(newGJ.properties || {}),
+                        _uid: uid,
+                        role: "rua",
+                        width_m: it?.properties?.width_m ?? 12,
+                    },
+                };
             })
         );
     }, []);
@@ -190,7 +253,16 @@ export default function useRuas({ aoiForClip }) {
         setRuas((prev) =>
             prev.map((it, idx) => {
                 const itUid = it?.properties?._uid ?? idx;
-                return itUid === uid ? { ...it, properties: { ...(it.properties || {}), _uid: uid, width_m: w } } : it;
+                return itUid === uid
+                    ? {
+                        ...it,
+                        properties: {
+                            ...(it.properties || {}),
+                            _uid: uid,
+                            width_m: w,
+                        },
+                    }
+                    : it;
             })
         );
     }, []);
@@ -209,7 +281,7 @@ export default function useRuas({ aoiForClip }) {
         setRuas,
         defaultRuaWidth,
         setDefaultRuaWidth,
-        ruaMask,          // sempre visível se existir
+        ruaMask,      // FeatureCollection de buffers por rua, já com _rua_uid
         ruaMaskRaw,
         ruaMaskClip,
         addRuaFromGJ,
