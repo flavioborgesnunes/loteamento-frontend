@@ -5,55 +5,51 @@
     @apply font-sans;
   }
 }
+
 body {
   font-family: 'Open Sans', ui-sans-serif, system-ui !important;
 }
 
-
 @theme {
-    --color-padrao-100: oklch(0.881 0.202259 116.5125);
-    --color-padrao-900: oklch(0.7251 0.1663 116.42);
-  }
+  --color-padrao-100: oklch(0.881 0.202259 116.5125);
+  --color-padrao-900: oklch(0.7251 0.1663 116.42);
+}
 
- 
-  
 @layer utilities {
-    .gradiente {
-      background-image: linear-gradient(to right, #D1E700, #A1B200);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
+  .gradiente {
+    background-image: linear-gradient(to right, #D1E700, #A1B200);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
   }
+}
 
+input::-webkit-input-placeholder {
+  color: #858796;
+  opacity: 1;
+}
 
-  input::-webkit-input-placeholder {
-    color: #858796;
-    opacity: 1;
-  }
-  
-  input::-moz-placeholder {
-    color: #858796;
-    opacity: 1;
-  }
-  
-  input:-ms-input-placeholder {
-    color: #858796;
-    opacity: 1;
-  }
-  
-  input::-ms-input-placeholder {
-    color: #858796;
-    opacity: 1;
-  }
-  
-  input::placeholder {
-    color: #858796;
-    opacity: 1;
-  }
+input::-moz-placeholder {
+  color: #858796;
+  opacity: 1;
+}
 
+input:-ms-input-placeholder {
+  color: #858796;
+  opacity: 1;
+}
 
-  /* Sobe TUDO que é controle do Leaflet/Geoman */
+input::-ms-input-placeholder {
+  color: #858796;
+  opacity: 1;
+}
+
+input::placeholder {
+  color: #858796;
+  opacity: 1;
+}
+
+/* Sobe TUDO que é controle do Leaflet/Geoman */
 .leaflet-container .leaflet-top,
 .leaflet-container .leaflet-bottom {
   z-index: 2147483647 !important; /* praticamente o topo do universo */
@@ -69,8 +65,6 @@ body {
   overflow: visible !important;
 }
 
-
 .mapboxgl-ctrl-geocoder {
-    display: none !important;
+  display: none !important;
 }
-

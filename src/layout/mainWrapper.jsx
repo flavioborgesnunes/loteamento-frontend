@@ -7,7 +7,7 @@ import { logout } from '../utils/auth'
 import bgBase from '../components/base/bg-base.png';
 import { Bell, User, CircleUserRound, Settings, FileUp, Brain, Home, LayoutDashboard, MonitorDown, ChevronDown, LogOut, UserRoundPlus, Eye, MapPlus, Grid } from 'lucide-react';
 import ItemMenu from '../components/base/ItemMenu';
-import logo from '../pages/auth/images/logoctz.png';
+import logo from '../pages/auth/images/logo_lotenet.png';
 
 
 const MainWrapper = () => {
@@ -72,7 +72,7 @@ const MainWrapper = () => {
                         "
                     >
                         <div className='w-full flex flex-col'>
-                            <img src={logo} className='pt-15 pb-8 mb-5 w-50 border-b-2 border-b-gray-200' />
+                            <img src={logo} className='w-64 h-40 object-cover object-center' />
                             <ItemMenu icon={LayoutDashboard} text="Dashboard" to="/dashboard" />
                             <ItemMenu icon={FileUp} text="Novo Estudo" to="/estudo" />
                             <ItemMenu icon={MapPlus} text="Restrições" to="/loteador" />

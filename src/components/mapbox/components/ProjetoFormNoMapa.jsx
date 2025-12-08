@@ -8,12 +8,21 @@ export default function ProjetoFormNoMapa({
     defaultMunicipio = "",
     onSalvar,
     onExportar,
+    swalTarget,
 }) {
     const [name, setName] = useState(defaultName);
     const [description, setDescription] = useState(defaultDescription);
     const [uf, setUf] = useState(defaultUF || "");
     const [municipio, setMunicipio] = useState(defaultMunicipio || "");
     const [busy, setBusy] = useState(false);
+
+    const showSwal = (options) => {
+        return Swal.fire({
+            target: swalTarget || document.body,
+            ...options,
+        });
+    };
+
 
     // Sincroniza quando o MapBoxComponent mudar os defaults
     useEffect(() => {
@@ -48,7 +57,7 @@ export default function ProjetoFormNoMapa({
         if (!onSalvar) return;
 
         if (!payload.name) {
-            Swal.fire({
+            showSwal({
                 icon: "warning",
                 title: "Informe um nome",
                 text: "Dê um nome para o projeto antes de salvar.",
@@ -61,7 +70,7 @@ export default function ProjetoFormNoMapa({
             await onSalvar(payload);
         } catch (err) {
             console.error(err);
-            Swal.fire({
+            showSwal({
                 icon: "error",
                 title: "Erro ao salvar",
                 text: "Não foi possível salvar o projeto.",
@@ -76,7 +85,7 @@ export default function ProjetoFormNoMapa({
         if (!onExportar) return;
 
         if (!payload.name) {
-            Swal.fire({
+            showSwal({
                 icon: "warning",
                 title: "Informe um nome",
                 text: "Dê um nome para o projeto antes de exportar.",
@@ -89,7 +98,7 @@ export default function ProjetoFormNoMapa({
             await onExportar(payload);
         } catch (err) {
             console.error(err);
-            Swal.fire({
+            showSwal({
                 icon: "error",
                 title: "Erro ao exportar",
                 text: "Não foi possível exportar o KML/KMZ.",

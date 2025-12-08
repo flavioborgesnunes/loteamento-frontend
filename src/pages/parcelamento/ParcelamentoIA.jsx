@@ -6,6 +6,9 @@ import ParcelamentoIAPanel from "./ParcelamentoIAPanel";
 
 import { Expand, Shrink } from "lucide-react";
 
+import { useLocation } from "react-router-dom";
+
+
 // (IMPORTS do OpenLayers iguais ao Parcelamento.jsx)
 import "ol/ol.css";
 import Map from "ol/Map";
@@ -485,6 +488,8 @@ export default function ParcelamentoIA() {
     const axiosAuth = useAxios();
     const { getOrCreatePlanoForProject } = useParcelamentoApi();
 
+    const location = useLocation();
+
     const mapRef = useRef(null);
     const containerRef = useRef(null);
     const wrapperRef = useRef(null);
@@ -539,6 +544,32 @@ export default function ParcelamentoIA() {
 
     // FullScreen
     const [isFullscreen, setIsFullscreen] = useState(false);
+
+    // Se a URL vier com ?projetoId=... e/ou ?restricoesId=..., aplica seleção inicial
+    useEffect(() => {
+        try {
+            const url = new URL(window.location.href);
+            const pid = url.searchParams.get("projetoId");
+            const rid = url.searchParams.get("restricoesId");
+
+            if (pid) {
+                const idNum = Number(pid);
+                if (Number.isFinite(idNum)) {
+                    setProjetoSel(idNum);
+                }
+            }
+
+            if (rid) {
+                const ridNum = Number(rid);
+                if (Number.isFinite(ridNum)) {
+                    setRestricaoSel(ridNum);
+                }
+            }
+        } catch {
+            // ignora erro de URL
+        }
+    }, []);
+
 
 
 
@@ -1003,6 +1034,29 @@ export default function ParcelamentoIA() {
             document.removeEventListener("fullscreenchange", handler);
         };
     }, []);
+
+    // 1) Se vier com projetoId pelo state, seleciona o projeto
+    useEffect(() => {
+        const st = location.state;
+        if (!st?.projetoId) return;
+
+        const pid = Number(st.projetoId);
+        if (Number.isFinite(pid)) {
+            setProjetoSel(pid);
+        }
+    }, [location.state]);
+
+    // 2) Depois que o projeto estiver selecionado, aplica a versão de restrições
+    useEffect(() => {
+        const st = location.state;
+        if (!st?.restricoesId || !projetoSel) return;
+
+        const rid = Number(st.restricoesId);
+        if (Number.isFinite(rid)) {
+            setRestricaoSel(rid);
+        }
+    }, [location.state, projetoSel]);
+
 
 
     // Params extras enviados para a IA (mask de ruas, eixos, guia)

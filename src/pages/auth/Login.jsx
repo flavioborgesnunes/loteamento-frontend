@@ -4,7 +4,7 @@ import { login } from '../../utils/auth';
 import { useAuthStore } from '../../store/auth';
 import Contact from '../../components/Contact';
 import imagemAuth from '../auth/images/img-auth.png'
-import logo from '../auth/images/logoctz.png'
+import logo from '../auth/images/logo_lotenet.png'
 
 function Login() {
     const [email, setEmail] = useState('');
@@ -86,7 +86,7 @@ function Login() {
                             Ainda não tem conta? <a href="/register-cliente" className="text-blue-500 hover:underline">Criar conta</a>
                         </p>
                     </form>
-                    <img src={logo} alt="" className='mt-10' />
+                    <img src={logo} alt="" className='h-40 w-80 object-cover object-center' />
                 </div>
                 <div className='hidden md:block flex-1'>
                     <img src={imagemAuth} alt="" />

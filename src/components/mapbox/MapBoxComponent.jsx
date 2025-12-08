@@ -202,6 +202,14 @@ export default function MapBoxComponent() {
         Hybrid: 'mapbox://styles/mapbox/satellite-streets-v12'
     };
 
+    const showSwal = (options) => {
+        return Swal.fire({
+            // se o wrapper estiver em fullscreen, coloca o modal lá dentro
+            target: wrapperRef.current || document.body,
+            ...options,
+        });
+    };
+
     // Carrega lista de projetos uma vez
     useEffect(() => {
         const carregarProjetos = async () => {
@@ -471,7 +479,7 @@ export default function MapBoxComponent() {
             setSecOverlays(novosSecOverlays);
         } catch (err) {
             console.error("Erro ao abrir projeto:", err);
-            Swal.fire({
+            showSwal({
                 icon: "error",
                 title: "Erro ao carregar projeto",
                 text: "Não foi possível carregar os dados do projeto.",
@@ -851,7 +859,7 @@ export default function MapBoxComponent() {
 
             // precisa ter pelo menos um polígono para ser "principal"
             if (!polysFC.features.length) {
-                Swal.fire({
+                showSwal({
                     icon: "error",
                     title: "Arquivo inválido",
                     text: "O KML principal não contém nenhum polígono.",
@@ -909,7 +917,7 @@ export default function MapBoxComponent() {
             } catch { }
         } catch (err) {
             console.error(err);
-            Swal.fire({
+            showSwal({
                 icon: "error",
                 title: "Erro ao abrir arquivo",
                 text: err.message || "Falha ao processar o KML/KMZ.",
@@ -926,7 +934,7 @@ export default function MapBoxComponent() {
             const kmlText = await readKMLorKMZFile(file);
             let fc = parseKMLTextToGeoJSON(kmlText);
             if (!fc?.features?.length) {
-                Swal.fire({
+                showSwal({
                     icon: "error",
                     title: "Arquivo vazio",
                     text: "Esse KML/KMZ não contém elementos utilizáveis.",
@@ -994,7 +1002,7 @@ export default function MapBoxComponent() {
             }
         } catch (err) {
             console.error(err);
-            Swal.fire({
+            showSwal({
                 icon: "error",
                 title: "Erro ao importar",
                 text: `Não foi possível abrir o arquivo ${file?.name}.`,
@@ -1280,12 +1288,17 @@ export default function MapBoxComponent() {
         downloadFile = true,  // padrão: baixar arquivo
     } = {}) => {
         try {
+            // vamos guardar aqui o ID final do projeto (novo ou existente)
+            let savedProjectId = projectId || null;
+
             // 1) Tenta obter a AOI; se não existir, usa o bbox dos overlays como fallback
             let aoiFeature = null;
             try {
                 aoiFeature = getAOIForExport();
             } catch (e) {
-                const feats = (secOverlays || []).flatMap(ov => ov?.data?.features || []);
+                const feats = (secOverlays || []).flatMap(
+                    (ov) => ov?.data?.features || []
+                );
                 if (feats.length) {
                     const [minX, minY, maxX, maxY] = turf.bbox({
                         type: "FeatureCollection",
@@ -1296,7 +1309,7 @@ export default function MapBoxComponent() {
             }
 
             if (!aoiFeature?.geometry) {
-                Swal.fire({
+                showSwal({
                     icon: "warning",
                     title: "AOI não encontrada",
                     text: "Defina um polígono principal (AOI) antes de salvar ou exportar.",
@@ -1317,15 +1330,16 @@ export default function MapBoxComponent() {
             // 3) Overlays secundários (raw)
             const overlaysRaw = {
                 type: "FeatureCollection",
-                features: (secOverlays || []).flatMap(ov => {
+                features: (secOverlays || []).flatMap((ov) => {
                     const overlayId = ov?.name || "overlay";
                     const color = ov?.color || null;
                     const feats = ov?.data?.features || [];
-                    return feats.map(f => ({
+                    return feats.map((f) => ({
                         type: "Feature",
                         properties: {
                             ...(f.properties || {}),
-                            __overlay_id: f?.properties?.__overlay_id || overlayId,
+                            __overlay_id:
+                                f?.properties?.__overlay_id || overlayId,
                             __color: f?.properties?.__color || color,
                         },
                         geometry: f.geometry,
@@ -1335,7 +1349,11 @@ export default function MapBoxComponent() {
 
             // 4) Recorte opcional no cliente
             const clippedOverlays = clipSecondaryOverlaysWithinAOI(
-                secOverlays.map(({ name, data, color }) => ({ id: name, data, color })),
+                secOverlays.map(({ name, data, color }) => ({
+                    id: name,
+                    data,
+                    color,
+                })),
                 aoiFeature,
                 { tolerance: 0.00002 }
             );
@@ -1353,11 +1371,11 @@ export default function MapBoxComponent() {
                 polygons: 0,
             };
 
-
             // 6) Payload
             const payload = {
                 project_id: projectId,
-                project_name: projectName || `Projeto ${new Date().toLocaleString()}`,
+                project_name:
+                    projectName || `Projeto ${new Date().toLocaleString()}`,
                 project_description: projectDescription || "",
                 uf: uf || "",
                 municipio: municipio || "",
@@ -1369,9 +1387,8 @@ export default function MapBoxComponent() {
 
                 format: outFormat,
 
-                // 👇 AQUI está a chave
-                persist: !!persist,              // se false -> backend NÃO deve salvar
-                replace_overlays: !!persist,     // só substitui overlays quando estiver salvando
+                persist: !!persist,
+                replace_overlays: !!persist,
             };
 
             // 7) Chamada ao backend
@@ -1379,29 +1396,35 @@ export default function MapBoxComponent() {
                 responseType: "blob",
             });
 
-            // 👉 Se não for pra baixar o arquivo, só mostra mensagem e sai
-            if (!downloadFile) {
-                Swal.fire({
-                    icon: "success",
-                    title: persist
-                        ? (projectId ? "Projeto atualizado!" : "Projeto salvo!")
-                        : "Operação concluída!",
-                    text: persist
-                        ? "Os dados do projeto foram salvos no servidor."
-                        : "Operação concluída sem download de arquivo.",
-                });
-                return;
+            // 👇 Tenta descobrir o ID do projeto pelos headers
+            // No Django você mandou X-Proj-Id
+            const headerProjId =
+                res.headers?.["x-proj-id"] ??
+                res.headers?.["X-Proj-Id"] ??
+                null;
+
+            if (headerProjId != null && headerProjId !== "") {
+                const n = Number(headerProjId);
+                if (Number.isFinite(n)) {
+                    savedProjectId = n;
+                }
             }
+
+            // 👉 Se NÃO for pra baixar o arquivo (caso SALVAR), apenas retorna o ID
+            if (!downloadFile) {
+                return { projectId: savedProjectId };
+            }
+
 
             // 8) Descobre o nome do arquivo
             const dispo = res.headers?.["content-disposition"] || "";
             const m = /filename="?([^"]+)"?/i.exec(dispo);
 
-            // se vier do backend, usa; senão, monta a partir do nome do projeto
             let filenameFromHeader = m?.[1] || "";
-            let fallbackBase = projectName && projectName.trim()
-                ? slugify(projectName.trim())
-                : "mapa_recorte";
+            let fallbackBase =
+                projectName && projectName.trim()
+                    ? slugify(projectName.trim())
+                    : "mapa_recorte";
 
             const filename =
                 filenameFromHeader ||
@@ -1419,11 +1442,11 @@ export default function MapBoxComponent() {
             });
             const url = URL.createObjectURL(blob);
 
-            // 10) SweetAlert com ESTILO PADRÃO e download só ao clicar
-            Swal.fire({
+            // 10) SweetAlert com download
+            showSwal({
                 icon: "success",
                 title: "Exportação pronta",
-                text: "Clique em \"Baixar arquivo\" para salvar o arquivo.",
+                text: 'Clique em "Baixar arquivo" para salvar o arquivo.',
                 confirmButtonText: "Baixar arquivo",
                 showCancelButton: false,
             }).then((result) => {
@@ -1436,11 +1459,12 @@ export default function MapBoxComponent() {
                     a.remove();
                     URL.revokeObjectURL(url);
                 } else {
-                    // se o usuário fechar sem baixar, libera o blob também
                     URL.revokeObjectURL(url);
                 }
             });
 
+            // 👉 mesmo no caso de download, devolvemos o ID para quem quiser usar
+            return { projectId: savedProjectId };
         } catch (err) {
             console.error(err);
             const msg = await (async () => {
@@ -1453,7 +1477,7 @@ export default function MapBoxComponent() {
                 return err?.message || "Falha ao salvar/exportar.";
             })();
 
-            Swal.fire({
+            showSwal({
                 icon: "error",
                 title: "Erro no servidor",
                 text: msg || "Falha ao salvar ou exportar o projeto.",
@@ -1461,17 +1485,79 @@ export default function MapBoxComponent() {
         }
     };
 
+
     async function handleSalvarProjeto({ name, description, uf, municipio }) {
-        await onExportKML({
+        // 1) Salva no backend (ou atualiza) e tenta pegar o ID retornado
+        const result = await onExportKML({
             projectId: projetoSel?.id || null,
             projectName: name,
             projectDescription: description,
             uf,
             municipio,
             outFormat: "kml",
-            persist: true,       // 👈 SALVAR no backend
-            downloadFile: false, // 👈 NÃO baixar arquivo
+            persist: true,
+            downloadFile: false, // salvar SEM baixar arquivo
         });
+
+        let savedProjectId =
+            result?.projectId ||
+            projetoSel?.id ||
+            null;
+
+        // 2) Fallback: se ainda não temos ID (caso de projeto novo),
+        //    recarrega a lista de projetos do backend e tenta achar pelo nome/UF/município
+        if (!savedProjectId) {
+            try {
+                const { data } = await axiosAuth.get("projetos/");
+                const lista = data || [];
+                setProjetos(lista);
+
+                // tenta achar pelos campos mais fortes
+                let candidato = null;
+
+                // 2.1) Nome + UF + município (mais preciso)
+                candidato = lista.find(
+                    (p) =>
+                        p.name === name &&
+                        (uf ? p.uf === uf : true) &&
+                        (municipio ? p.municipio === municipio : true)
+                );
+
+                // 2.2) Se não achar, tenta só pelo nome
+                if (!candidato) {
+                    const mesmosNomes = lista.filter((p) => p.name === name);
+                    if (mesmosNomes.length === 1) {
+                        candidato = mesmosNomes[0];
+                    } else if (mesmosNomes.length > 1) {
+                        // pega o último (mais novo)
+                        candidato = mesmosNomes[mesmosNomes.length - 1];
+                    }
+                }
+
+                if (candidato) {
+                    savedProjectId = candidato.id;
+                }
+            } catch (err) {
+                console.error("Erro recarregando lista de projetos:", err);
+            }
+        }
+
+        // 3) Mostra o SweetAlert perguntando o que fazer
+        const swalResult = await showSwal({
+            icon: "success",
+            title: projetoSel?.id ? "Projeto atualizado!" : "Projeto salvo!",
+            text: "O que você deseja fazer agora?",
+            showCancelButton: true,
+            confirmButtonText: "Ir para o Restrições",
+            cancelButtonText: "Continuar no Estudo",
+        });
+
+        // 4) Se quiser ir pro Geoman, navega levando o projetoId (se tiver)
+        if (swalResult.isConfirmed) {
+            navigate("/loteador", {
+                state: savedProjectId ? { projetoId: savedProjectId } : undefined,
+            });
+        }
     }
 
     async function handleExportarProjeto({ name, description, uf, municipio }) {
@@ -1579,6 +1665,7 @@ export default function MapBoxComponent() {
                             defaultMunicipio={municipioSelecionado}
                             onSalvar={handleSalvarProjeto}
                             onExportar={handleExportarProjeto}
+                            swalTarget={wrapperRef.current}
                         />
                     </div>
                 )}
@@ -1593,6 +1680,7 @@ export default function MapBoxComponent() {
                         defaultMunicipio={municipioSelecionado}
                         onSalvar={handleSalvarProjeto}
                         onExportar={handleExportarProjeto}
+                        swalTarget={wrapperRef.current}
                     />
                 </div>
             )}

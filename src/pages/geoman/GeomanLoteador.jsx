@@ -1,5 +1,7 @@
 // src/pages/geoman/GeomanLoteador.jsx
 import React, { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+
 import {
     MapContainer,
     TileLayer,
@@ -136,6 +138,7 @@ function safeRemoveDraftLayer(map, layer) {
         }
     } catch { }
 }
+
 
 function MapEffects({ drawMode, drawNonce, onCreateFeature, onMapReady }) {
     const map = useMap();
@@ -354,6 +357,10 @@ export default function GeomanLoteador() {
     const axiosAuth = useAxios();
     const mapRef = useRef(null);
 
+    const location = useLocation();
+    const navigate = useNavigate();
+
+
     // Restrições manuais (polígonos e círculos convertidos para Polygon)
     const [restrManuais, setRestrManuais] = useState([]);
     const manualStyle = { color: "#d97706", fillColor: "#fcd34d", fillOpacity: 0.3, weight: 2, opacity: 1 };
@@ -399,6 +406,17 @@ export default function GeomanLoteador() {
     useEffect(() => () => {
         if (recalcRAF.current) cancelAnimationFrame(recalcRAF.current);
     }, []);
+
+    // Se veio de outra tela com navigate(..., { state: { projetoId, restricoesId } })
+    useEffect(() => {
+        const st = location.state;
+        if (!st?.projetoId) return;
+
+        const idNum = Number(st.projetoId);
+        if (!Number.isFinite(idNum)) return;
+
+        abrirProjeto(idNum);
+    }, [location.state]);
 
     const [projetos, setProjetos] = useState([]);
     const [projetoSel, setProjetoSel] = useState("");
@@ -1301,38 +1319,53 @@ export default function GeomanLoteador() {
             };
 
             let resp;
+            let versaoIdFinal = restricaoSelId || null;
+            let titulo;
+
             if (restricaoSelId) {
-                // EDITAR restrição existente (PUT /restricoes/<id>/)
+                // EDITAR restrição existente
                 resp = await axiosAuth.put(
                     `/restricoes/${restricaoSelId}/`,
                     payload
                 );
-                Swal.fire({
-                    icon: "success",
-                    title: "Versão atualizada",
-                    text: `Restrição #${restricaoSelId} atualizada com sucesso.`,
-                });
+                versaoIdFinal = restricaoSelId;
+                titulo = "Versão atualizada";
             } else {
-                // CRIAR nova versão para o projeto (POST /projetos/<id>/restricoes/)
+                // CRIAR nova versão
                 resp = await axiosAuth.post(
                     `/projetos/${projetoSel}/restricoes/`,
                     payload
                 );
                 const data = resp.data;
-                Swal.fire({
-                    icon: "success",
-                    title: "Versão salva",
-                    text: `Versão v${data.version} criada para o projeto.`,
-                });
-                // coloca o id recém criado como selecionado, se quiser
-                if (data.id) {
+                titulo = "Versão salva";
+
+                if (data?.id) {
+                    versaoIdFinal = data.id;
                     setRestricaoSelId(data.id);
-                    syncUrlRestricoes(data.id);
+                    syncUrlRestricoes(data.id); // se quiser pode até remover depois
                 }
             }
 
-            // recarrega a lista de versões do projeto atual
+            // recarrega a lista de versões
             await carregarVersoesRestricoes(projetoSel);
+
+            const result = await Swal.fire({
+                icon: "success",
+                title: titulo,
+                text: "O que você deseja fazer agora?",
+                showCancelButton: true,
+                confirmButtonText: "Ir para Parcelamento IA",
+                cancelButtonText: "Continuar nas Restrições",
+            });
+
+            if (result.isConfirmed && versaoIdFinal && projetoSel) {
+                navigate("/ia-parcelamento", {
+                    state: {
+                        projetoId: projetoSel,
+                        restricoesId: versaoIdFinal,
+                    },
+                });
+            }
         } catch (e) {
             console.error("[salvar restrições] erro:", e);
             Swal.fire({
@@ -1344,6 +1377,7 @@ export default function GeomanLoteador() {
             setIsSaving(false);
         }
     }
+
 
     async function deletarRestricaoAtual() {
         if (!restricaoSelId) {
