@@ -14,7 +14,6 @@ import EstudoMapa from './pages/estudo_mapa/EstudoMapa';
 import VisualizarProjetos from './pages/visualizar/VisualizarProjetos';
 import Parcelamento from './pages/parcelamento/Parcelamento'
 import GeomanLoteador from './pages/geoman/GeomanLoteador';
-import GerarQuarteirao from './pages/parcelamento/GerarQuarteirao';
 import ParcelamentoIA from './pages/parcelamento/ParcelamentoIA';
 import ProjetosLista from "./pages/projetos/ProjetosLista";
 import RestricoesLista from "./pages/projetos/RestricoesLista";
@@ -46,7 +45,6 @@ function App() {
           <Route path="/visualizar-projetos" element={<VisualizarProjetos />} />
           <Route path="/parcelamento" element={<Parcelamento />} />
           <Route path="/ia-parcelamento" element={<ParcelamentoIA />} />
-          <Route path="/parcelamento/gerar-quarteirao" element={<GerarQuarteirao />} />
           <Route path="/settings" element={<PerfilUsuario />} />
           <Route path='/teste' element={<ParkingLayoutPage />} />
         </Route>
