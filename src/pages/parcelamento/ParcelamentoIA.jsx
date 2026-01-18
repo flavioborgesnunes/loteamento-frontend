@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import useAxios from "../../utils/useAxios";
 import useParcelamentoApi from "./parcelamento";
 import ViasPanel from "./components/ViasPanel";
+import ParametrosGeraisPanel from "./components/ParametrosGeraisPanel";
 
 // 👉 painel de blocos (ajuste o path se precisar)
 import ParcelamentoBlocosPanel from "./ParcelamentoBlocosPanel";
@@ -898,6 +899,24 @@ export default function ParcelamentoIA() {
     const [viasSugestoes, setViasSugestoes] = useState([]); // ranked[]
     const [viasBest, setViasBest] = useState(null);         // best
 
+    // ✅ parâmetros gerais (separado das vias)
+    const [paramsGerais, setParamsGerais] = useState({
+        frente_min_m: 10,
+        prof_min_m: 25,
+        area_lote_m2: 250,
+        calcada_largura_m: 2.5,
+    });
+
+    // ✅ parâmetros de vias (fica no ViasPanel)
+    const [paramsVias, setParamsVias] = useState({
+        larg_rua_vert_m: 8,
+        larg_rua_horiz_m: 8,
+        // futuramente:
+        // canteiro_m: 2.0,
+        // tipo_via: "local",
+    });
+
+
 
     useEffect(() => {
         const bases = baseLayersRef.current;
@@ -1112,22 +1131,68 @@ export default function ParcelamentoIA() {
     const applyViasSuggestionToMap = (suggestion) => {
         const L = layersRef.current;
 
+        // ✅ Se vier no formato novo (best.preview), usa ele
+        const preview = suggestion?.preview || null;
+
+        // ✅ legado (urbanismo/roads)
         const maskFC = toFC(suggestion?.roads_mask_fc);
         const axisFC = toFC(suggestion?.roads_axis_fc);
 
-        // Desenha a sugestão nas camadas de PRÉVIA
-        setLayerData(L.prev_vias_area, maskFC, styleViasArea);
-        setLayerData(L.prev_vias_line, axisFC, styleViasLineWhite);
+        // ✅ novo (parcelamento)
+        const viasAreaFC = toFC(preview?.vias_area);
+        const viasLineFC = toFC(preview?.vias);
+        const quarteiroesFC = toFC(preview?.quarteiroes);
+        const calcadasFC = toFC(preview?.calcadas);
+        const areasVaziasFC = toFC(preview?.areas_vazias);
 
-        // opcional: log do score/debug
-        console.log("[vias] apply suggestion:", {
+        console.log("[vias] apply:", {
             id: suggestion?.id,
-            score: suggestion?.score,
-            debug: suggestion?.debug,
-            metrics: suggestion?.metrics,
-            penalties: suggestion?.penalties,
+            hasLegacy: !!(suggestion?.roads_mask_fc || suggestion?.roads_axis_fc),
+            hasPreview: !!preview,
+            counts: {
+                legacy_mask: (maskFC?.features || []).length,
+                legacy_axis: (axisFC?.features || []).length,
+                prev_vias_area: (viasAreaFC?.features || []).length,
+                prev_vias: (viasLineFC?.features || []).length,
+                prev_quarteiroes: (quarteiroesFC?.features || []).length,
+                prev_calcadas: (calcadasFC?.features || []).length,
+                prev_vazios: (areasVaziasFC?.features || []).length,
+            },
+            layersReady: {
+                prev_vias_area: !!L.prev_vias_area,
+                prev_vias_line: !!L.prev_vias_line,
+                prev_quarteiroes: !!L.prev_quarteiroes,
+                calcadas: !!L.calcadas,
+            },
         });
+
+        // 🔥 Se as layers ainda não existem, isso explica “não acontece nada”
+        if (!L.prev_vias_area || !L.prev_vias_line) {
+            console.warn("[vias] layers de prévia não inicializadas (prev_vias_area/prev_vias_line).");
+            return;
+        }
+
+        // 1) desenha legado (se existir)
+        if ((maskFC?.features || []).length) setLayerData(L.prev_vias_area, maskFC, styleViasArea);
+        if ((axisFC?.features || []).length) setLayerData(L.prev_vias_line, axisFC, styleViasLineWhite);
+
+        // 2) desenha novo (se existir) — sobrepõe o legado
+        if ((viasAreaFC?.features || []).length) setLayerData(L.prev_vias_area, viasAreaFC, styleViasArea);
+        if ((viasLineFC?.features || []).length) setLayerData(L.prev_vias_line, viasLineFC, styleViasLineWhite);
+
+        if (L.prev_quarteiroes && (quarteiroesFC?.features || []).length) {
+            setLayerData(L.prev_quarteiroes, quarteiroesFC, styleQuartBorda);
+        }
+        if (L.calcadas && (calcadasFC?.features || []).length) {
+            setLayerData(L.calcadas, calcadasFC, styleCalcada);
+        }
+
+        // Se você criar uma layer p/ vazios depois, pluga aqui:
+        // if (L.prev_areas_vazias) setLayerData(L.prev_areas_vazias, areasVaziasFC, styleVazios);
+
+        console.log("[vias] applied OK:", suggestion?.id);
     };
+
 
 
     return (
@@ -1205,6 +1270,11 @@ export default function ParcelamentoIA() {
                 Gerar Vias
             </button>
 
+            <div className="absolute z-[1200] top-28 right-2 flex flex-col gap-2">
+                <ParametrosGeraisPanel value={paramsGerais} onChange={setParamsGerais} />
+            </div>
+
+
             {/* Painel de BLOCOS incremental */}
             {/* <div className="absolute z-[1000] top-28 left-2 bg-white/90 backdrop-blur rounded-xl shadow p-3 w-[420px] max-h-[80vh] overflow-y-auto">
                 <h3 className="font-semibold mb-2">Quarteirões + Calçadas (incremental)</h3>
@@ -1246,21 +1316,56 @@ export default function ParcelamentoIA() {
                             (geo?.aoi && { type: "Feature", geometry: geo?.aoi, properties: {} })
                         }
                         linhaBase={linhaBase}
-                        onClose={() => setShowViasPanel(false)}
+                        // ✅ NOVO: parâmetros gerais (lote/calcada) ficam fora do ViasPanel
+                        paramsGerais={paramsGerais}
+                        setParamsGerais={setParamsGerais}
+                        // ✅ NOVO: parâmetros de vias separados (larguras etc.)
+                        paramsVias={paramsVias}
+                        setParamsVias={setParamsVias}
+                        // (mantém os callbacks que você já usa)
+                        onPickSuggestion={(sug) => {
+                            if (!sug) return;
+                            // sug pode ser: { preview: {...} } (novo) ou item compat (ranked/best)
+                            applyViasSuggestionToMap(sug?.preview ? sug : { id: sug?.id || "picked", preview: sug });
+                        }}
+
                         onLoaded={(payload) => {
-                            // payload = { best, ranked, tolerance }
+                            console.log("[vias] onLoaded payload keys:", payload ? Object.keys(payload) : payload);
+
+                            // ✅ Caso 1: payload já é preview do parcelamento
+                            const isPreview =
+                                payload && typeof payload === "object" &&
+                                (payload.vias || payload.vias_area || payload.quarteiroes || payload.calcadas);
+
+                            if (isPreview) {
+                                // limpa ranked/best (não existe nesse formato)
+                                setViasBest(null);
+                                setViasSugestoes([]);
+
+                                // ✅ aplica direto no mapa (embrulha em {preview: ...} pra reutilizar sua função)
+                                applyViasSuggestionToMap({ id: "preview_direct", preview: payload });
+                                return;
+                            }
+
+                            // ✅ Caso 2: payload é o formato antigo { ranked, best }
+                            console.log("[vias] onLoaded best?", !!payload?.best, "ranked len:", payload?.ranked?.length);
+
                             setViasBest(payload?.best || null);
                             setViasSugestoes(payload?.ranked || []);
 
-                            // aplica automaticamente a melhor
-                            if (payload?.best) applyViasSuggestionToMap(payload.best);
+                            const best = payload?.best || payload?.ranked?.[0] || null;
+                            if (!best) {
+                                console.warn("[vias] sem best nem ranked[0]. Nada a aplicar.");
+                                return;
+                            }
+
+                            applyViasSuggestionToMap(best);
                         }}
-                        onPickSuggestion={(sug) => {
-                            applyViasSuggestionToMap(sug);
-                        }}
-                        existingRanked={viasSugestoes}
-                        existingBest={viasBest}
+
+
+                        onClose={() => setShowViasPanel(false)}
                     />
+
                 </div>
             )}
 

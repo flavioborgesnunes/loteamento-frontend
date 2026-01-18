@@ -4,19 +4,17 @@ import useAxios from "../../../utils/useAxios";
 import { X, RefreshCcw, CheckCircle2 } from "lucide-react";
 
 /**
- * ViasPanel
- * - Gera sugestões de malha viária no backend (roads/preview/)
- * - Exibe lista "ranked" para visualizar múltiplas sugestões
- * - Ao clicar numa sugestão, chama onPickSuggestion(sug) para renderizar no mapa (prévia)
+ * ViasPanel (refatorado)
+ * - Agora NÃO guarda parâmetros gerais de lote/calcada internamente.
+ * - Recebe paramsGerais (frente/profundidade/area_lote/calcada) por props.
+ * - Mantém aqui apenas parâmetros de vias/quarteirões + avançados.
  *
- * Props:
- *  - restricoesId: number|string (opcional)
- *  - alFeature: GeoJSON Feature (Polygon/MultiPolygon)
- *  - linhaBase: GeoJSON Feature LineString (opcional)
- *  - onClose: () => void
- *  - onLoaded: (payload) => void   // payload inteiro do backend
- *  - onPickSuggestion: (suggestion) => void
- *  - existingRanked, existingBest: para reabrir painel sem perder lista
+ * Props (novas):
+ *  - paramsGerais: { frente_min_m, prof_min_m|prof_ideal_m, area_lote_m2, calcada_largura_m }
+ *  - setParamsGerais: fn
+ *
+ * Mantidas:
+ *  - restricoesId, alFeature, linhaBase, onClose, onLoaded, onPickSuggestion, existingRanked, existingBest
  */
 export default function ViasPanel({
     restricoesId,
@@ -27,6 +25,10 @@ export default function ViasPanel({
     onPickSuggestion,
     existingRanked = [],
     existingBest = null,
+
+    // ✅ novos
+    paramsGerais,
+    setParamsGerais,
 }) {
     const axiosAuth = useAxios();
 
@@ -36,24 +38,21 @@ export default function ViasPanel({
     const [best, setBest] = useState(existingBest || null);
     const [selectedId, setSelectedId] = useState(existingBest?.id || "");
 
+    // ✅ Agora este form é SOMENTE de vias/quarteirões/avançado
     const [form, setForm] = useState({
-        // FIXOS
-        frente_min_m: 10,
-        area_min_m2: 200,
-
-        // IDEAL (tolerável)
-        prof_ideal_m: 30,
-        tol_prof_down: 0.25,
-        tol_prof_up: 0.5,
-
-        // Quadra / vias
-        fileiras: 2,
-        calcada_largura_m: 2,
+        // vias
         larg_rua_horiz_m: 12,
         larg_rua_vert_m: 12,
 
+        // quarteirões (estrutura)
+        fileiras: 2,
         compr_max_quarteirao_m: 160,
         tol_block_len: 0.25,
+
+        // tolerâncias de profundidade (ainda úteis p/ heurística)
+        // obs: "fundo" vem no paramsGerais (prof_min_m ou prof_ideal_m)
+        tol_prof_down: 0.25,
+        tol_prof_up: 0.5,
 
         // ✅ Regras flexíveis por fundos (Y - paralelas)
         y_min_fundos: 1,
@@ -67,7 +66,7 @@ export default function ViasPanel({
 
         // ✅ Política de fileiras (manual)
         rows_policy: "edge_1_interior_prefer_2",
-        // fator * prof_ideal (vira metros no backend)
+        // fator * prof_ideal/prof_min (vira metros no backend)
         edge_band_factor: 1.5,
         top_band_factor: 1.5,
 
@@ -99,8 +98,19 @@ export default function ViasPanel({
         if (!sug) return;
         setSelectedId(sug.id);
         setBest((prev) => prev || sug);
+
         if (onPickSuggestion) onPickSuggestion(sug);
+
+        // ✅ NOVO: aplica no mapa o preview da sugestão
+        if (onLoaded) onLoaded(sug.preview || sug);
     };
+
+
+    // -----------------------
+    // ✅ params gerais vindos do painel separado
+    // -----------------------
+    const gerais = paramsGerais || {};
+    const setGerais = (patch) => setParamsGerais?.({ ...gerais, ...patch });
 
     const run = async () => {
         setErr("");
@@ -109,28 +119,33 @@ export default function ViasPanel({
             return;
         }
 
+        // ✅ Junta tudo: gerais + vias/quarteirões
+        // Observação: seu backend atual usa prof_ideal_m; eu aceito tanto prof_min_m quanto prof_ideal_m.
         const params = {
-            frente_min_m: Number(form.frente_min_m),
-            area_min_m2: Number(form.area_min_m2),
+            // ------- gerais -------
+            frente_min_m: Number(gerais.frente_min_m ?? 10),
+            // fundo/profundidade: compat
+            prof_ideal_m: Number(gerais.prof_ideal_m ?? gerais.prof_min_m ?? 30),
+            // área lote (não usada agora, mas já vai no contrato)
+            area_lote_m2: Number(gerais.area_lote_m2 ?? 250),
+            // calçada agora é geral (mas usada nas vias)
+            calcada_largura_m: Number(gerais.calcada_largura_m ?? 2.5),
 
-            prof_ideal_m: Number(form.prof_ideal_m),
-            tol_prof_down: Number(form.tol_prof_down),
-            tol_prof_up: Number(form.tol_prof_up),
-
+            // ------- vias/quarteirões -------
             fileiras: Number(form.fileiras),
-            calcada_largura_m: Number(form.calcada_largura_m),
-
             larg_rua_horiz_m: Number(form.larg_rua_horiz_m),
             larg_rua_vert_m: Number(form.larg_rua_vert_m),
 
             compr_max_quarteirao_m: Number(form.compr_max_quarteirao_m),
             tol_block_len: Number(form.tol_block_len),
 
+            tol_prof_down: Number(form.tol_prof_down),
+            tol_prof_up: Number(form.tol_prof_up),
+
             y_min_fundos: Number(form.y_min_fundos),
             y_max_fundos: Number(form.y_max_fundos),
             y_tol_fundos: Number(form.y_tol_fundos),
 
-            // ✅ política de fileiras (manual)
             rows_policy: String(form.rows_policy || "edge_1_interior_prefer_2"),
             edge_band_factor: Number(form.edge_band_factor),
             top_band_factor: Number(form.top_band_factor),
@@ -162,6 +177,12 @@ export default function ViasPanel({
         try {
             const { data } = await axiosAuth.post("roads/preview/", body);
 
+            console.log("[roads/preview] received:", {
+                hasBest: !!data?.best,
+                rankedLen: data?.ranked?.length,
+                bestKeys: data?.best ? Object.keys(data.best) : null,
+            });
+
             const rk = data?.ranked || [];
             const bs = data?.best || null;
 
@@ -172,7 +193,15 @@ export default function ViasPanel({
             if (bs) pickSuggestion(bs);
             else if (rk.length) pickSuggestion(rk[0]);
 
-            if (onLoaded) onLoaded(data);
+            // ✅ NOVO: o que vai pro mapa é o preview do parcelamento (dentro do best/ranked)
+            const preview =
+                bs?.preview ||
+                rk?.[0]?.preview ||
+                null;
+
+            // Mantém compatibilidade: se ainda não veio preview, usa o payload antigo
+            if (onLoaded) onLoaded(preview || data);
+
         } catch (e) {
             console.error("[ViasPanel] erro ao gerar vias:", e);
             const msg =
@@ -184,6 +213,7 @@ export default function ViasPanel({
         } finally {
             setBusy(false);
         }
+
     };
 
     const fmt = (n, digits = 2) => (Number.isFinite(Number(n)) ? Number(n).toFixed(digits) : "—");
@@ -215,69 +245,162 @@ export default function ViasPanel({
                 )}
 
                 {err && (
-                    <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
-                        {err}
-                    </div>
+                    <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">{err}</div>
                 )}
 
-                {/* FORM */}
-                <div className="grid grid-cols-2 gap-2">
-                    <Field label="Frente mínima (m) [FIXO]" value={form.frente_min_m} onChange={(v) => setField("frente_min_m", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Área mínima (m²) [FIXO]" value={form.area_min_m2} onChange={(v) => setField("area_min_m2", normalizeNumber(v))} disabled={busy} />
+                {/* ✅ BLOCO: Dados gerais (somente leitura/ajuste rápido, mas ficam no painel separado) */}
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="text-xs font-bold text-slate-800 mb-2">Dados gerais (lote/calçada)</div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <Field
+                            label="Frente mín (m)"
+                            value={gerais.frente_min_m ?? 10}
+                            onChange={(v) => setGerais({ frente_min_m: Number(normalizeNumber(v) || 0) })}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Fundo/Prof (m)"
+                            value={gerais.prof_ideal_m ?? gerais.prof_min_m ?? 30}
+                            onChange={(v) => setGerais({ prof_ideal_m: Number(normalizeNumber(v) || 0) })}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Área lote (m²)"
+                            value={gerais.area_lote_m2 ?? 250}
+                            onChange={(v) => setGerais({ area_lote_m2: Number(normalizeNumber(v) || 0) })}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Calçada (m)"
+                            value={gerais.calcada_largura_m ?? 2.5}
+                            onChange={(v) => setGerais({ calcada_largura_m: Number(normalizeNumber(v) || 0) })}
+                            disabled={busy}
+                        />
+                    </div>
+                    <div className="mt-2 text-[11px] text-slate-500">
+                        *Esses valores também aparecem no painel separado. Aqui é só um “resumo/atalho”.*
+                    </div>
+                </div>
 
-                    <Field label="Prof. ideal (m)" value={form.prof_ideal_m} onChange={(v) => setField("prof_ideal_m", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Fileiras (hint)" value={form.fileiras} onChange={(v) => setField("fileiras", normalizeNumber(v))} disabled={busy} />
+                {/* ✅ BLOCO: Parâmetros de vias / quarteirões */}
+                <div className="rounded-lg border border-slate-200 p-3">
+                    <div className="text-xs font-bold text-slate-800 mb-2">Parâmetros de vias e quarteirões</div>
 
-                    <Field label="Tol. prof ↓ (0-1)" value={form.tol_prof_down} onChange={(v) => setField("tol_prof_down", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Tol. prof ↑ (0-1)" value={form.tol_prof_up} onChange={(v) => setField("tol_prof_up", normalizeNumber(v))} disabled={busy} />
+                    <div className="grid grid-cols-2 gap-2">
+                        <Field
+                            label="Rua horiz (m)"
+                            value={form.larg_rua_horiz_m}
+                            onChange={(v) => setField("larg_rua_horiz_m", normalizeNumber(v))}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Rua vert (m)"
+                            value={form.larg_rua_vert_m}
+                            onChange={(v) => setField("larg_rua_vert_m", normalizeNumber(v))}
+                            disabled={busy}
+                        />
 
-                    <Field label="Calçada (m)" value={form.calcada_largura_m} onChange={(v) => setField("calcada_largura_m", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Rua horiz (m)" value={form.larg_rua_horiz_m} onChange={(v) => setField("larg_rua_horiz_m", normalizeNumber(v))} disabled={busy} />
+                        <Field
+                            label="Compr. alvo quadra (m)"
+                            value={form.compr_max_quarteirao_m}
+                            onChange={(v) => setField("compr_max_quarteirao_m", normalizeNumber(v))}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Tol. comp. quadra (0-1)"
+                            value={form.tol_block_len}
+                            onChange={(v) => setField("tol_block_len", normalizeNumber(v))}
+                            disabled={busy}
+                        />
 
-                    <Field label="Rua vert (m)" value={form.larg_rua_vert_m} onChange={(v) => setField("larg_rua_vert_m", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Compr. alvo quadra (m)" value={form.compr_max_quarteirao_m} onChange={(v) => setField("compr_max_quarteirao_m", normalizeNumber(v))} disabled={busy} />
+                        <Field
+                            label="Fileiras (hint)"
+                            value={form.fileiras}
+                            onChange={(v) => setField("fileiras", normalizeNumber(v))}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Orientação (graus) opcional"
+                            value={form.orientacao_graus}
+                            onChange={(v) => setField("orientacao_graus", v)}
+                            placeholder="ex: 15"
+                            disabled={busy}
+                        />
+                    </div>
+                </div>
 
-                    <Field label="Tol. comp. quadra (0-1)" value={form.tol_block_len} onChange={(v) => setField("tol_block_len", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Orientação (graus) opcional" value={form.orientacao_graus} onChange={(v) => setField("orientacao_graus", v)} placeholder="ex: 15" disabled={busy} />
+                {/* ✅ BLOCO: Avançado (mantive igual, só reorganizei) */}
+                <div className="rounded-lg border border-slate-200 p-3">
+                    <div className="text-xs font-bold text-slate-800 mb-2">Avançado</div>
 
-                    {/* Regras flexíveis Y */}
-                    <Field label="Y min fundos" value={form.y_min_fundos} onChange={(v) => setField("y_min_fundos", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Y max fundos" value={form.y_max_fundos} onChange={(v) => setField("y_max_fundos", normalizeNumber(v))} disabled={busy} />
-                    <Field label="Tol fundos (0-1)" value={form.y_tol_fundos} onChange={(v) => setField("y_tol_fundos", normalizeNumber(v))} disabled={busy} />
+                    <div className="grid grid-cols-2 gap-2">
+                        <Field
+                            label="Tol. prof ↓ (0-1)"
+                            value={form.tol_prof_down}
+                            onChange={(v) => setField("tol_prof_down", normalizeNumber(v))}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Tol. prof ↑ (0-1)"
+                            value={form.tol_prof_up}
+                            onChange={(v) => setField("tol_prof_up", normalizeNumber(v))}
+                            disabled={busy}
+                        />
 
-                    {/* Opcionais X */}
-                    <Field label="X min mult (opc)" value={form.x_min_mult} onChange={(v) => setField("x_min_mult", v)} disabled={busy} placeholder="ex: 0.75" />
-                    <Field label="X max mult (opc)" value={form.x_max_mult} onChange={(v) => setField("x_max_mult", v)} disabled={busy} placeholder="ex: 1.25" />
-                    <Field label="X tol (opc)" value={form.x_tol} onChange={(v) => setField("x_tol", v)} disabled={busy} placeholder="ex: 0.05" />
+                        {/* Regras flexíveis Y */}
+                        <Field
+                            label="Y min fundos"
+                            value={form.y_min_fundos}
+                            onChange={(v) => setField("y_min_fundos", normalizeNumber(v))}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Y max fundos"
+                            value={form.y_max_fundos}
+                            onChange={(v) => setField("y_max_fundos", normalizeNumber(v))}
+                            disabled={busy}
+                        />
+                        <Field
+                            label="Tol fundos (0-1)"
+                            value={form.y_tol_fundos}
+                            onChange={(v) => setField("y_tol_fundos", normalizeNumber(v))}
+                            disabled={busy}
+                        />
 
-                    {/* ✅ Política de fileiras (manual) */}
-                    <Select
-                        label="Política de fileiras (manual)"
-                        value={form.rows_policy}
-                        onChange={(v) => setField("rows_policy", v)}
-                        disabled={busy}
-                        options={[
-                            { value: "edge_1_interior_prefer_2", label: "Bordas 1 fileira; miolo prefere 2" },
-                            { value: "top_1_interior_prefer_2", label: "Topo 1 fileira; resto prefere 2" },
-                            { value: "first_last_1_interior_prefer_2", label: "Primeiro/último 1 fileira; meio prefere 2" },
-                            { value: "prefer_2_by_width", label: "Preferir 2 por largura (auto)" },
-                        ]}
-                    />
+                        {/* Opcionais X */}
+                        <Field label="X min mult (opc)" value={form.x_min_mult} onChange={(v) => setField("x_min_mult", v)} disabled={busy} placeholder="ex: 0.75" />
+                        <Field label="X max mult (opc)" value={form.x_max_mult} onChange={(v) => setField("x_max_mult", v)} disabled={busy} placeholder="ex: 1.25" />
+                        <Field label="X tol (opc)" value={form.x_tol} onChange={(v) => setField("x_tol", v)} disabled={busy} placeholder="ex: 0.05" />
 
-                    <Field
-                        label="Banda borda (x prof_ideal)"
-                        value={form.edge_band_factor}
-                        onChange={(v) => setField("edge_band_factor", normalizeNumber(v))}
-                        disabled={busy}
-                        placeholder="ex: 1.5"
-                    />
-                    <Field
-                        label="Banda topo (x prof_ideal)"
-                        value={form.top_band_factor}
-                        onChange={(v) => setField("top_band_factor", normalizeNumber(v))}
-                        disabled={busy}
-                        placeholder="ex: 1.5"
-                    />
+                        {/* Política de fileiras */}
+                        <Select
+                            label="Política de fileiras (manual)"
+                            value={form.rows_policy}
+                            onChange={(v) => setField("rows_policy", v)}
+                            disabled={busy}
+                            options={[
+                                { value: "edge_1_interior_prefer_2", label: "Bordas 1 fileira; miolo prefere 2" },
+                                { value: "top_1_interior_prefer_2", label: "Topo 1 fileira; resto prefere 2" },
+                                { value: "first_last_1_interior_prefer_2", label: "Primeiro/último 1 fileira; meio prefere 2" },
+                                { value: "prefer_2_by_width", label: "Preferir 2 por largura (auto)" },
+                            ]}
+                        />
+
+                        <Field
+                            label="Banda borda (x prof)"
+                            value={form.edge_band_factor}
+                            onChange={(v) => setField("edge_band_factor", normalizeNumber(v))}
+                            disabled={busy}
+                            placeholder="ex: 1.5"
+                        />
+                        <Field
+                            label="Banda topo (x prof)"
+                            value={form.top_band_factor}
+                            onChange={(v) => setField("top_band_factor", normalizeNumber(v))}
+                            disabled={busy}
+                            placeholder="ex: 1.5"
+                        />
+                    </div>
                 </div>
 
                 <div className="flex gap-2">
